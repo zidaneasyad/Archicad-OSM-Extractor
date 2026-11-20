@@ -9,6 +9,7 @@ Pull a site's surroundings — terrain, buildings, roads, water, trees — from 
 ## Contents
 
 - [What it does](#what-it-does)
+- [Features](#features)
 - [Gallery](#gallery)
 - [Installation](#installation)
 - [Tutorial: your first site](#tutorial-your-first-site)
@@ -33,6 +34,60 @@ Draw a boundary on a map, then **Fetch → Convert → Import**:
 | Walls, fences, piers, power towers and poles | OpenStreetMap (under *More features*) | Native elements |
 
 Every imported element gets a classification, `OSM ID` / `Source` properties and an Archicad group, so a **re-import replaces the previous one cleanly**. The import also sets the project location and the sun position for the date and time you choose.
+
+## Features
+
+**Map and boundary**
+- Search by address, decimal coordinates, degrees-minutes-seconds or a pasted Google Maps link
+- Boundary as a rectangle, circle, polygon, or a polyline corridor (for roads and rivers) with an adjustable half-width
+- Live area, perimeter and centre in the status bar; copy or paste the boundary as JSON
+- Feature count and download estimate before fetching
+- Light and dark mode
+
+**Terrain**
+- 15+ elevation sources:
+  - national LiDAR: Netherlands 0.5 m, France 0.5 m, UK 1 m, Norway 1 m, USA 3DEP, Baden-Württemberg 1 m, Indonesia DEMNAS
+  - polar: ArcticDEM, REMA
+  - global: Mapterhorn, GEDTM30, FABDEM, Copernicus GLO-30
+  - your own GeoTIFF
+- *Auto* and *Layered* modes pick the most detailed source available and blend the edges into a global fallback
+- Bare-earth approximation removes buildings and trees from surface models
+- Hillshade relief preview on the map
+- Two terrain models: a smooth **Mesh**, or a **stepped contour model** of flat Slab terraces, like a physical site model
+- Labelled 2D **contour lines** on the floor plan (minor and major), with an automatic or fixed interval from 0.25 to 10 m
+- Land-cover meshes draped on the terrain (beach, sand, wetland, mangrove)
+
+**Buildings**
+- OpenStreetMap footprints with heights from `height` / `building:levels` tags, or your default floor height and level count
+- Gaps filled from **Overture Maps** (Google Open Buildings, Microsoft, Esri), marked as estimated
+- Optional building parts and roof shapes
+
+**Roads and infrastructure**
+- Roads as Beams with widths from the road type, draped on the terrain, with bridges kept level over water
+- Railways and platforms, walls and fences, piers and bridge decks, power towers and poles
+
+**Vegetation**
+- Mapped trees as library objects, randomly rotated, with sizes from OSM tags, measured canopy heights (where available) or a genus/species table
+- Tree scatter in parks, orchards, nurseries, mangroves and forests, plus shrubs and hedges
+- Full 3D or light representation; custom library part names
+
+**Archicad integration**
+- Native tools only: Mesh, Slab, Beam and library objects. Gaps where Archicad has no fitting tool are flagged in the build report.
+- Classifications, `OSM ID` / `Source` properties and groups per element type; a re-import replaces the previous import
+- Everything on one story; optional single target layer (works with office templates that don't allow new layers)
+- Plan graphics: water, ground, building and road fills, and road beams shown as outlines on their home story
+- Project location (geolocation) and sun position for a chosen date and time
+- Build report with counts, warnings and a check that every element landed where expected
+
+**Large sites and performance**
+- Super-light preset for big areas: 2D trees, coarser terrain, no minor paths
+- Downloads run in parallel and are cached, so repeat runs for the same site are instant
+- Data credits for every source used are written into the project automatically
+
+**Ways to run it**
+- Standalone Windows app (`OSM Context.exe`), its own window, no Python needed
+- From source with Python
+- Launched from inside Archicad via the Python Palette
 
 ## Gallery
 
