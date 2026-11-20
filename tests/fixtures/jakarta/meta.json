@@ -1,0 +1,94 @@
+{
+  "boundary": {
+    "type": "polygon",
+    "coordinates": [
+      [
+        106.718348,
+        -6.0947
+      ],
+      [
+        106.720387,
+        -6.093665
+      ],
+      [
+        106.721358,
+        -6.095393
+      ],
+      [
+        106.718981,
+        -6.096412
+      ],
+      [
+        106.718348,
+        -6.0947
+      ]
+    ]
+  },
+  "bbox": {
+    "south": -6.096412,
+    "west": 106.718348,
+    "north": -6.093665,
+    "east": 106.721358
+  },
+  "osm_bbox": {
+    "south": -6.097220480057492,
+    "west": 106.7175349237381,
+    "north": -6.092856519942508,
+    "east": 106.7221710762619
+  },
+  "dem_bbox": {
+    "south": -6.097220480057492,
+    "west": 106.7175349237381,
+    "north": -6.092856519942508,
+    "east": 106.7221710762619
+  },
+  "fetched_at": "2026-11-15T09:14:44.812098+00:00",
+  "dem_requested": "auto",
+  "dem_source": "Copernicus GLO-30 (copernicus-dem-30m.s3.amazonaws.com)",
+  "dem_source_id": "copernicus",
+  "dem_attribution": "Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
+  "dem_licence": "Copernicus DEM licence (free use incl. commercial, attribution required)",
+  "dem_vertical_datum": "EGM2008",
+  "dem_accuracy": {
+    "horizontal_m": 30.0,
+    "vertical_m": 5.0,
+    "kind": "DSM",
+    "note": "Copernicus GLO-30 is a SURFACE model (buildings, bridges, vegetation included), ~30 m grid (1 arc-second; coarser in longitude above 50 deg lat). Expect about +-5 m in open terrain and +-10 m or worse in urban/forest areas and on steep slopes."
+  },
+  "dem_crs": "EPSG:4326",
+  "overpass_url": "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "cache_version": 2,
+  "osm_query_rev": 4,
+  "warnings": [
+    "bridge/tunnel chain completion failed (RuntimeError: Overpass failed on all mirrors: https://overpass-api.de/api/interpreter: HTTPError: 504 Server Error: Gateway Timeout for url: https://overpass-api.de/api/inter): bridge ends cut by the bbox keep estimated heights"
+  ],
+  "dem_fallback_reason": "bw_dgm1 not used: RuntimeError: bbox outside Baden-Wuerttemberg",
+  "osm_base": "2026-11-15T09:32:02Z",
+  "osm_age_days": 0.0,
+  "bridge_chains": {
+    "rounds": 2,
+    "added_ways": 10,
+    "unresolved_ends": 4,
+    "errors": [
+      "RuntimeError: Overpass failed on all mirrors: https://overpass-api.de/api/interpreter: HTTPError: 504 Server Error: Gateway Timeout for url: https://overpass-api.de/api/inter"
+    ]
+  },
+  "dem_ext": {
+    "source": "copernicus",
+    "points_outside_dem": 21,
+    "points_covered": 21,
+    "bbox": {
+      "south": -6.108466986704995,
+      "west": 106.71670594915872,
+      "north": -6.083437313295005,
+      "east": 106.72673025084127
+    },
+    "shape": [
+      91,
+      37
+    ],
+    "warnings": [],
+    "accuracy": "Copernicus GLO-30 DSM (~30 m); used only for bridge abutment / tunnel portal heights"
+  },
+  "osm_refreshed_at": "2026-11-15T09:39:10.484146+00:00"
+}

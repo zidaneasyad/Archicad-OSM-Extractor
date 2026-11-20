@@ -1,0 +1,90 @@
+{
+  "boundary": {
+    "type": "rectangle",
+    "coordinates": [
+      [
+        106.6002678,
+        29.5865978
+      ],
+      [
+        106.6023322,
+        29.5865978
+      ],
+      [
+        106.6023322,
+        29.5884022
+      ],
+      [
+        106.6002678,
+        29.5884022
+      ],
+      [
+        106.6002678,
+        29.5865978
+      ]
+    ]
+  },
+  "bbox": {
+    "south": 29.5865978,
+    "west": 106.6002678,
+    "north": 29.5884022,
+    "east": 106.6023322
+  },
+  "osm_bbox": {
+    "south": 29.585789319942506,
+    "west": 106.59933808797727,
+    "north": 29.589210680057494,
+    "east": 106.60326191202273
+  },
+  "dem_bbox": {
+    "south": 29.585789319942506,
+    "west": 106.59933808797727,
+    "north": 29.589210680057494,
+    "east": 106.60326191202273
+  },
+  "fetched_at": "2026-11-15T04:13:48.332987+00:00",
+  "dem_requested": "auto",
+  "dem_source": "Copernicus GLO-30 (copernicus-dem-30m.s3.amazonaws.com)",
+  "dem_source_id": "copernicus",
+  "dem_attribution": "Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
+  "dem_licence": "Copernicus DEM licence (free use incl. commercial, attribution required)",
+  "dem_vertical_datum": "EGM2008",
+  "dem_accuracy": {
+    "horizontal_m": 30.0,
+    "vertical_m": 5.0,
+    "kind": "DSM",
+    "note": "Copernicus GLO-30 is a SURFACE model (buildings, bridges, vegetation included), ~30 m grid (1 arc-second; coarser in longitude above 50 deg lat). Expect about +-5 m in open terrain and +-10 m or worse in urban/forest areas and on steep slopes."
+  },
+  "dem_crs": "EPSG:4326",
+  "overpass_url": "https://overpass-api.de/api/interpreter",
+  "cache_version": 2,
+  "osm_query_rev": 3,
+  "warnings": [],
+  "dem_fallback_reason": "bw_dgm1 not used: RuntimeError: bbox outside Baden-Wuerttemberg",
+  "osm_base": "2026-11-15T07:15:23Z",
+  "osm_age_days": 0.0,
+  "bridge_chains": {
+    "rounds": 2,
+    "added_ways": 15,
+    "unresolved_ends": 0,
+    "errors": []
+  },
+  "dem_ext": {
+    "source": "copernicus",
+    "points_outside_dem": 22,
+    "points_covered": 22,
+    "bbox": {
+      "south": 29.584339813295003,
+      "west": 106.59819219198484,
+      "north": 29.592490886704997,
+      "east": 106.60432840801516
+    },
+    "shape": [
+      30,
+      24
+    ],
+    "warnings": [],
+    "accuracy": "Copernicus GLO-30 DSM (~30 m); used only for bridge abutment / tunnel portal heights"
+  },
+  "osm_refreshed_at": "2026-11-15T07:17:59.063101+00:00"
+}

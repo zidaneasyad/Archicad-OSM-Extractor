@@ -1,0 +1,103 @@
+{
+  "boundary": {
+    "type": "rectangle",
+    "coordinates": [
+      [
+        9.0541465,
+        48.5148007
+      ],
+      [
+        9.0568535,
+        48.5148007
+      ],
+      [
+        9.0568536,
+        48.5165993
+      ],
+      [
+        9.0541464,
+        48.5165993
+      ],
+      [
+        9.0541465,
+        48.5148007
+      ]
+    ]
+  },
+  "bbox": {
+    "south": 48.5148007,
+    "west": 9.0541464,
+    "north": 48.5165993,
+    "east": 9.0568536
+  },
+  "osm_bbox": {
+    "south": 48.514531206647504,
+    "west": 9.053739565258795,
+    "north": 48.5168687933525,
+    "east": 9.057260434741206
+  },
+  "dem_bbox": {
+    "south": 48.514531206647504,
+    "west": 9.053739565258795,
+    "north": 48.5168687933525,
+    "east": 9.057260434741206
+  },
+  "fetched_at": "2026-11-17T03:23:37.601037+00:00",
+  "dem_requested": "auto",
+  "dem_source": "LGL Baden-Wuerttemberg DGM1 (opengeodata.lgl-bw.de)",
+  "dem_source_id": "bw_dgm1",
+  "dem_attribution": "LGL-BW (2026) Datenlizenz Deutschland - Namensnennung - Version 2.0, www.lgl-bw.de",
+  "dem_licence": "dl-de/by-2-0 (https://www.govdata.de/dl-de/by-2-0)",
+  "dem_vertical_datum": "DHHN2016 (NHN, quasigeoid GCG2016)",
+  "dem_accuracy": {
+    "horizontal_m": 1.0,
+    "vertical_m": 0.5,
+    "kind": "DTM",
+    "note": "LGL DGM1: bare-earth terrain model from airborne laser scanning, 1 m grid. Tile metadata states 0.15 m accuracy (open terrain); allow +-0.5 m on steep, vegetated or built-up ground."
+  },
+  "dem_crs": "EPSG:25832",
+  "dem_tiles": [
+    {
+      "tile": "503_5373",
+      "missing": false,
+      "url": "https://opengeodata.lgl-bw.de/data/dgm/dgm1_32_503_5372_2_bw.zip",
+      "member": "dgm1_32_503_5372_2_bw/dgm1_32_503_5373_1_bw_2020.xyz",
+      "n_nodata": 0,
+      "Aktualitaet": "2020-01-16",
+      "Genauigkeit": "0.15",
+      "crs_h": "DE_DHHN2016_NH"
+    },
+    {
+      "tile": "504_5373",
+      "missing": false,
+      "url": "https://opengeodata.lgl-bw.de/data/dgm/dgm1_32_503_5372_2_bw.zip",
+      "member": "dgm1_32_503_5372_2_bw/dgm1_32_504_5373_1_bw_2020.xyz",
+      "n_nodata": 0,
+      "Aktualitaet": "2020-01-16",
+      "Genauigkeit": "0.15",
+      "crs_h": "DE_DHHN2016_NH"
+    }
+  ],
+  "dem_dates": [
+    "2020-01-16"
+  ],
+  "overpass_url": "https://overpass-api.de/api/interpreter",
+  "cache_version": 2,
+  "osm_query_rev": 5,
+  "warnings": [],
+  "osm_base": "2026-11-17T03:23:49Z",
+  "osm_age_days": 0.0,
+  "bridge_chains": {
+    "rounds": 0,
+    "added_ways": 0,
+    "unresolved_ends": 0,
+    "errors": []
+  },
+  "ndom": {
+    "available": true,
+    "source": "LGL-BW nDOM1 (opengeodata.lgl-bw.de/data/ndom1, 1 m, = bDOM - DGM1)",
+    "attribution": "LGL-BW (2026) Datenlizenz Deutschland - Namensnennung - Version 2.0, www.lgl-bw.de",
+    "tiles": 2,
+    "warnings": []
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "boundary": {
+    "type": "rectangle",
+    "coordinates": [
+      [
+        86.9241935,
+        27.987159
+      ],
+      [
+        86.9262265,
+        27.987159
+      ],
+      [
+        86.9262266,
+        27.9889638
+      ],
+      [
+        86.9241934,
+        27.9889638
+      ],
+      [
+        86.9241935,
+        27.987159
+      ]
+    ]
+  },
+  "bbox": {
+    "south": 27.987159,
+    "west": 86.9241934,
+    "north": 27.9889638,
+    "east": 86.9262266
+  },
+  "osm_bbox": {
+    "south": 27.986350519942505,
+    "west": 86.92327784111626,
+    "north": 27.989772280057494,
+    "east": 86.92714215888374
+  },
+  "dem_bbox": {
+    "south": 27.986350519942505,
+    "west": 86.92327784111626,
+    "north": 27.989772280057494,
+    "east": 86.92714215888374
+  },
+  "fetched_at": "2026-11-15T03:49:01.579629+00:00",
+  "dem_requested": "auto",
+  "dem_source": "Copernicus GLO-30 (copernicus-dem-30m.s3.amazonaws.com)",
+  "dem_source_id": "copernicus",
+  "dem_attribution": "Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
+  "dem_licence": "Copernicus DEM licence (free use incl. commercial, attribution required)",
+  "dem_vertical_datum": "EGM2008",
+  "dem_accuracy": {
+    "horizontal_m": 30.0,
+    "vertical_m": 5.0,
+    "kind": "DSM",
+    "note": "Copernicus GLO-30 is a SURFACE model (buildings, bridges, vegetation included), ~30 m grid (1 arc-second; coarser in longitude above 50 deg lat). Expect about +-5 m in open terrain and +-10 m or worse in urban/forest areas and on steep slopes."
+  },
+  "dem_crs": "EPSG:4326",
+  "overpass_url": "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "cache_version": 2,
+  "warnings": [],
+  "dem_fallback_reason": "bw_dgm1 not used: RuntimeError: bbox outside Baden-Wuerttemberg",
+  "osm_query_rev": 3,
+  "osm_refreshed_at": "2026-11-15T07:18:45.582934+00:00",
+  "osm_base": "2026-11-15T07:17:26Z",
+  "osm_age_days": 0.0,
+  "bridge_chains": {
+    "rounds": 0,
+    "added_ways": 0,
+    "unresolved_ends": 0,
+    "errors": []
+  }
+}

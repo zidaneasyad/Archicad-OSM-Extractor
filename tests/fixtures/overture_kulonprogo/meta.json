@@ -1,0 +1,96 @@
+{
+  "boundary": {
+    "type": "rectangle",
+    "coordinates": [
+      [
+        110.1705699,
+        -7.8554281
+      ],
+      [
+        110.1719301,
+        -7.8554281
+      ],
+      [
+        110.1719301,
+        -7.8540718
+      ],
+      [
+        110.1705699,
+        -7.8540718
+      ],
+      [
+        110.1705699,
+        -7.8554281
+      ]
+    ]
+  },
+  "bbox": {
+    "south": -7.8554281,
+    "west": 110.1705699,
+    "north": -7.8540718,
+    "east": 110.1719301
+  },
+  "osm_bbox": {
+    "south": -7.856236580057492,
+    "west": 110.16975376269986,
+    "north": -7.853263319942508,
+    "east": 110.17274623730015
+  },
+  "dem_bbox": {
+    "south": -7.856236580057492,
+    "west": 110.16975376269986,
+    "north": -7.853263319942508,
+    "east": 110.17274623730015
+  },
+  "fetched_at": "2026-11-17T04:51:28.797478+00:00",
+  "dem_requested": "auto",
+  "dem_source": "Copernicus GLO-30 (copernicus-dem-30m.s3.amazonaws.com)",
+  "dem_source_id": "copernicus",
+  "dem_attribution": "Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
+  "dem_licence": "Copernicus DEM licence (free use incl. commercial, attribution required)",
+  "dem_vertical_datum": "EGM2008",
+  "dem_accuracy": {
+    "horizontal_m": 30.0,
+    "vertical_m": 5.0,
+    "kind": "DSM",
+    "note": "Copernicus GLO-30 is a SURFACE model (buildings, bridges, vegetation included), ~30 m grid (1 arc-second; coarser in longitude above 50 deg lat). Expect about +-5 m in open terrain and +-10 m or worse in urban/forest areas and on steep slopes."
+  },
+  "dem_crs": "EPSG:4326",
+  "overpass_url": "https://overpass-api.de/api/interpreter",
+  "cache_version": 2,
+  "osm_query_rev": 5,
+  "warnings": [],
+  "dem_fallback_reason": "bw_dgm1 not used: RuntimeError: bbox outside Baden-Wuerttemberg",
+  "osm_base": "2026-11-17T04:50:26Z",
+  "osm_age_days": 0.0,
+  "bridge_chains": {
+    "rounds": 0,
+    "added_ways": 0,
+    "unresolved_ends": 0,
+    "errors": []
+  },
+  "overture": {
+    "status": "ok",
+    "release": "2026-10-21.0",
+    "count": 162,
+    "datasets": {
+      "OpenStreetMap": 33,
+      "Google Open Buildings": 105,
+      "Microsoft ML Buildings": 24
+    },
+    "files_read": [
+      "part-00320-6cde2e6b-1b49-5626-a35a-5f1df694e6ff-c000.zstd.parquet"
+    ],
+    "files_total": 512,
+    "download_est_bytes": 4537799,
+    "elapsed_s": 5.7,
+    "fetched_at": "2026-11-17T04:52:12.493674+00:00",
+    "attribution": "Buildings: \u00a9 OpenStreetMap contributors (ODbL); Overture Maps Foundation, buildings theme (ODbL), incl. Google Open Buildings (CC BY 4.0), Global ML Building Footprints, Microsoft (ODbL-1.0)",
+    "licence": "ODbL-1.0",
+    "source_credits": [
+      "\u00a9 OpenStreetMap contributors (ODbL-1.0)",
+      "Google Open Buildings (CC BY 4.0)",
+      "Global ML Building Footprints, Microsoft (ODbL-1.0)"
+    ]
+  }
+}

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSM Context for Archicad</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+<link rel="stylesheet" href="style.css">
+<script>try{var t=localStorage.getItem("osmctx.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+</head>
+<body>
+<div id="app">
+  <nav id="toolbox" aria-label="Toolbox">
+    <button class="tool" id="tArrow" title="Select / edit vertices (Esc)" aria-label="Select"><svg viewBox="0 0 24 24"><path d="M6 3l12 9-5.2 1.1L15.5 19l-2.6 1.2-2.7-5.8L6 17.5z"/></svg></button>
+    <div class="sep"></div>
+    <button class="tool" id="tRect" title="Rectangle boundary" aria-label="Rectangle"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12"/></svg></button>
+    <button class="tool" id="tCircle" title="Circle boundary" aria-label="Circle"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg></button>
+    <button class="tool" id="tPoly" title="Polygon boundary" aria-label="Polygon"><svg viewBox="0 0 24 24"><path d="M5 17l2-11 10-2 3 9-7 8z"/></svg></button>
+    <button class="tool" id="tLine" title="Polyline corridor" aria-label="Polyline"><svg viewBox="0 0 24 24"><path d="M4 18l6-9 5 5 5-9" fill="none"/><circle cx="4" cy="18" r="1.6" class="dot"/><circle cx="10" cy="9" r="1.6" class="dot"/><circle cx="15" cy="14" r="1.6" class="dot"/><circle cx="20" cy="5" r="1.6" class="dot"/></svg></button>
+    <div class="sep"></div>
+    <button class="tool" id="tDelete" title="Delete boundary" aria-label="Delete boundary"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V4.5h6V7M7 7l1 13h8l1-13M10 11v6M14 11v6" fill="none"/></svg></button>
+    <div class="grow"></div>
+    <button class="tool" id="themeBtn" title="Light / dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none"/><path d="M12 4a8 8 0 0 1 0 16z" class="fillc"/></svg></button>
+  </nav>
+
+  <aside id="side">
+    <div class="title">OSM Context <span>for Archicad</span></div>
+    <div id="acStatus" class="msg" style="padding:4px 12px 0"><span id="acStatusTxt">Checking Archicad...</span> <button id="acRecheck" class="small">Re-check</button></div>
+
+    <details class="pnl" open>
+      <summary>Location</summary>
+      <div class="body">
+        <div class="f1"><label class="lbl" for="q">Search place or coordinates</label>
+          <div class="row">
+            <input id="q" type="text" placeholder="Address, 48.5193, 9.0565, DMS, Google Maps URL" autocomplete="off">
+            <button id="go" class="primary">Go</button>
+          </div>
+        </div>
+        <ul id="results"></ul>
+        <div id="searchMsg" class="msg"></div>
+      </div>
+    </details>
+
+    <details class="pnl" open>
+      <summary>Boundary</summary>
+      <div class="body">
+        <div class="row">
+          <button id="sq100">100 m square here</button>
+          <button id="clear">Clear</button>
+        </div>
+        <div id="corridor" class="f hidden">
+          <label for="buf">Corridor half-width (m)</label>
+          <input id="buf" type="number" min="1" step="1" value="10">
+        </div>
+        <p class="hint">Draw with the toolbox left of the map: rectangle, circle, polygon, polyline. One boundary at a time; drag vertices to edit.</p>
+        <div class="row between"><span class="lbl">Boundary JSON</span><button id="copy" class="small">Copy</button></div>
+        <pre id="json">(no boundary)</pre>
+      </div>
+    </details>
+
+    <details class="pnl">
+      <summary>Terrain &amp; Ground</summary>
+      <div class="body">
+        <div class="f"><label for="s_dem">Terrain source</label>
+          <select id="s_dem">
+            <option value="auto">Auto (BW DGM1 / Copernicus)</option>
+            <option value="layered">Layered stack (Tier 1 Regional -&gt; Mapterhorn -&gt; GLO-30)</option>
+            <option value="id_demnas">Indonesia BIG DEMNAS (~8 m)</option>
+            <option value="mapterhorn">Mapterhorn Global (0.5-30 m)</option>
+            <option value="bw_dgm1">Baden-Württemberg DGM1 (1 m)</option>
+            <option value="us_3dep">USA USGS 3DEP (1-10 m)</option>
+            <option value="nl_ahn">Netherlands PDOK AHN (0.5 m)</option>
+            <option value="fr_ign">France IGN LiDAR HD (0.5 m)</option>
+            <option value="uk_ea">UK EA LiDAR DTM (1 m)</option>
+            <option value="no_kartverket">Norway Kartverket DTM (1 m)</option>
+            <option value="arcticdem">ArcticDEM (&gt;60°N, 2 m)</option>
+            <option value="rema">Antarctica REMA (&lt;60°S, 2 m)</option>
+            <option value="gedtm30">Global GEDTM30 Bare-Earth (30 m)</option>
+            <option value="fabdem">Global FABDEM Bare-Earth (30 m, NC)</option>
+            <option value="copernicus">Copernicus GLO-30 (30 m DSM)</option>
+            <option value="file">Local file path</option>
+          </select></div>
+        <div id="demFileRow" class="f hidden"><label for="s_demfile">DEM GeoTIFF (DTM)</label>
+          <input id="s_demfile" type="text" placeholder="C:\data\dtm.tif"></div>
+        <div class="f"><label for="s_ground">Ground</label>
+          <select id="s_ground"><option value="auto">Auto</option><option value="dsm">As-is</option><option value="bare_earth_approx">Bare-earth approximation</option></select></div>
+        <div class="f"><label for="i_terrain">Include terrain</label><input type="checkbox" id="i_terrain"></div>
+        <div class="f"><label for="s_hillshade">Hillshade relief overlay</label><input type="checkbox" id="s_hillshade"></div>
+        <div class="f"><label for="s_ctype">Terrain model</label>
+          <select id="s_ctype"><option value="mesh">Real contour map (Mesh)</option><option value="stepped">Stepped contour model (Terrace Slabs)</option></select></div>
+        <div class="f"><label for="s_contours">Contour lines</label><input type="checkbox" id="s_contours"></div>
+        <div class="f"><label for="s_cint">Interval</label>
+          <select id="s_cint"><option value="">Auto</option><option value="0.25">0.25 m</option><option value="0.5">0.5 m</option><option value="1">1 m</option><option value="2">2 m</option><option value="5">5 m</option><option value="10">10 m</option></select></div>
+        <div class="hint" id="cintAuto">Contours (minor + major, labelled) are drawn as 2D lines in the site plan on every import. Auto picks 15-25 lines from the relief.</div>
+        <div class="f"><label for="i_water">Include water</label><input type="checkbox" id="i_water"></div>
+        <div class="f"><label></label><button id="resetSettings" class="small">Reset all defaults</button></div>
+      </div>
+    </details>
+
+    <details class="pnl">
+      <summary>Buildings</summary>
+      <div class="body">
+        <div class="f"><label for="s_floor">Floor height (m)</label><input id="s_floor" type="number" step="0.1" min="0.1"></div>
+        <div class="f"><label for="s_levels">Default levels</label><input id="s_levels" type="number" step="1" min="1"></div>
+        <div class="f"><label for="i_buildings">Include buildings</label><input type="checkbox" id="i_buildings"></div>
+        <div class="f"><label for="i_overture_buildings">Fill missing buildings from Overture Maps</label><input type="checkbox" id="i_overture_buildings"></div>
+        <p class="hint">Where OSM has few buildings (villages), Overture Maps footprints (Google Open Buildings, Microsoft ML, Esri) are added if they overlap no OSM building. Marked "estimated", height from Overture height / floors or the default; Source property names the dataset; group "Buildings (Overture)". Downloaded once per site (a few MB, ~10 s), never blocks the OSM fetch. Also on in the super-light preset.</p>
+      </div>
+    </details>
+
+    <details class="pnl">
+      <summary>Roads</summary>
+      <div class="body">
+        <div class="f"><label for="i_roads">Include roads</label><input type="checkbox" id="i_roads"></div>
+        <div class="lbl">Width by class (m)</div>
+        <div class="grid3" id="roadWidths"></div>
+      </div>
+    </details>
+
+    <details class="pnl">
+      <summary>Trees &amp; shrubs</summary>
+      <div class="body">
+        <div class="f"><label for="i_trees">Include trees</label><input type="checkbox" id="i_trees"></div>
+        <div class="f"><label>Scatter trees in:</label></div>
+        <div class="f"><label for="s_ts_mangrove">mangrove</label><input type="checkbox" id="s_ts_mangrove"></div>
+        <div class="f"><label for="s_ts_orchard">orchard</label><input type="checkbox" id="s_ts_orchard"></div>
+        <div class="f"><label for="s_ts_plant_nursery">plant nursery</label><input type="checkbox" id="s_ts_plant_nursery"></div>
+        <div class="f"><label for="s_ts_park">parks &amp; gardens</label><input type="checkbox" id="s_ts_park"></div>
+        <div class="f"><label for="s_forest">woods &amp; forests</label><input type="checkbox" id="s_forest"></div>
+        <p class="hint">Estimated from mapped areas, not individual surveyed trees. Density per area type: mangrove 1 per 25 m&sup2; (6 m), orchard rows 1 per 30 m&sup2; (5 m), nursery 1 per 15 m&sup2; (3 m), parks &amp; gardens 1 per 120 m&sup2; (10 m, kept off buildings/water/roads/pitches), woods 1 per 40 m&sup2;. Woods are off by default (can be thousands of objects). Fixed seed, one Archicad group per area, sized like other trees (measured nDOM where available).</p>
+        <div class="f"><label for="i_shrubs">Include shrubs &amp; hedges</label><input type="checkbox" id="i_shrubs"></div>
+        <p class="hint">Hedges (barrier=hedge) become one Hedge Model per segment; shrubs (natural=shrub, plus scatter in shrubbery/scrub areas) use the Shrubs part (2D symbol in 2D mode). Groups: Shrubs and Hedges next to Trees.</p>
+        <div class="f"><label for="s_tree">Fallback height (m)</label><input id="s_tree" type="number" step="0.5" min="0.5"></div>
+        <div class="f"><label for="s_bh">Broadleaf height (m)</label><input id="s_bh" type="number" step="0.5" min="0.5"></div>
+        <div class="f"><label for="s_ch">Conifer height (m)</label><input id="s_ch" type="number" step="0.5" min="0.5"></div>
+        <div class="f"><label for="s_bcr">Broadleaf crown / height</label><input id="s_bcr" type="number" step="0.05" min="0.05"></div>
+        <div class="f"><label for="s_ccr">Conifer crown / height</label><input id="s_ccr" type="number" step="0.05" min="0.05"></div>
+        <div class="f"><label for="s_genus">Genus/species table</label><input type="checkbox" id="s_genus"></div>
+        <div class="f"><label for="s_treemode">Representation</label>
+          <select id="s_treemode">
+            <option value="2d">2D symbol only</option>
+            <option value="light">Light 3D (image, lighter on GPU)</option>
+            <option value="full3d">Full 3D (default)</option>
+            <option value="lib">Library part by name</option>
+          </select></div>
+        <div id="treeLibRow" class="f hidden"><label for="s_treelib">Library part name</label>
+          <input id="s_treelib" type="text" placeholder="e.g. My Tree Model" autocomplete="off"></div>
+        <p class="hint">Falls back to Light 3D (warning in the build report) when the part is not loaded in Archicad. Conifers (leaf_type needleleaved) get the pine part when the data carries that tag.</p>
+        <p class="hint">Size per tree: OSM tag, else measured (nDOM, where available), else typical genus/species size, else the broadleaf/conifer defaults, else the fallback height. Table values are typical, not measured.</p>
+      </div>
+    </details>
+
+    <details class="pnl">
+      <summary>More features</summary>
+      <div class="body">
+        <div class="f"><label for="i_railways">Railways &amp; platforms</label><input type="checkbox" id="i_railways"></div>
+        <p class="hint">Rail, light rail, tram, subway, narrow gauge ways (not disused/abandoned) become one Beam per segment like roads (3 m per track, gauge/tracks tags used); platforms become thin Slabs. Groups: Railways.</p>
+        <div class="f"><label for="i_walls">Walls &amp; fences</label><input type="checkbox" id="i_walls"></div>
+        <p class="hint">barrier=wall / retaining_wall / city_wall use the Wall tool (<=5 m pieces, base on the terrain; heights 2 / 1.5 / 4 m unless tagged). Fences and guard rails use the Railing tool (1.5 / 0.8 m). Group: Walls &amp; fences.</p>
+        <div class="f"><label for="i_building_parts">Building parts &amp; roofs</label><input type="checkbox" id="i_building_parts"></div>
+        <p class="hint">building:part with height / min_height / levels becomes one Slab per part (the parent outline only where no part covers it); roof:shape gabled / hipped / pyramidal / skillion with roof:height becomes a Roof element, anything unclear keeps the flat block. Parts sit in a Building subgroup inside Buildings.</p>
+        <div class="f"><label for="i_ground">Ground surfaces</label><input type="checkbox" id="i_ground"></div>
+        <p class="hint">Parking, pitches, playgrounds, pedestrian areas, squares: 0.05 m Slab on flat ground, draped Mesh on a slope. Group: Ground surfaces.</p>
+        <div class="f"><label for="i_piers">Piers &amp; bridge decks</label><input type="checkbox" id="i_piers"></div>
+        <p class="hint">man_made=pier / bridge areas become a Slab at the deck height (pier: water level + 1 m; bridge: highest bridge road inside). Group: Piers.</p>
+        <div class="f"><label for="i_power">Power towers &amp; poles</label><input type="checkbox" id="i_power"></div>
+        <p class="hint">Off by default. power=tower / pole become Columns; power lines are only counted. Group: Power.</p>
+      </div>
+    </details>
+
+    <details class="pnl">
+      <summary>Sun</summary>
+      <div class="body">
+        <div class="f"><label for="sunDate">Date</label><input id="sunDate" type="date" value="2026-06-21"></div>
+        <div class="f"><label for="sunTime">Time (local clock)</label><input id="sunTime" type="time" value="12:00"></div>
+        <div class="presets" id="sunPresets"></div>
+        <dl>
+          <dt>Compass</dt><dd id="sunAz">-</dd>
+          <dt>Altitude</dt><dd id="sunAlt">-</dd>
+          <dt>Archicad</dt><dd id="sunAc">-</dd>
+          <dt>Time zone</dt><dd id="sunTz">-</dd>
+        </dl>
+        <div class="hint">Compass: clockwise from true north. Archicad angle: counter-clockwise from east = (90 - compass) mod 360.</div>
+      </div>
+    </details>
+
+    <details class="pnl" open>
+      <summary>Accuracy</summary>
+      <div class="body">
+        <div id="disclaimer" class="disc">Loading...</div>
+        <div id="credits" class="credits"></div>
+        <div id="accNotes" class="hidden"></div>
+      </div>
+    </details>
+
+    <details class="pnl" open>
+      <summary>Import</summary>
+      <div class="body">
+        <div class="row">
+          <button id="count">Count features</button>
+          <button id="fetch" class="primary">Fetch + Convert</button>
+        </div>
+        <div id="warn" class="warn hidden"></div>
+        <div id="slBadge" class="badge hidden"><b>Super-light preset active</b> - 2D trees, no shrubs/hedges or tree scatter, no nDOM download, coarse terrain (min 20 m), no footway/path/cycleway/steps/service roads; buildings, water, railways and walls kept (building parts/roofs, ground surfaces, piers off). <a href="#" id="slOffBtn">Use normal settings</a></div>
+        <div id="slOff" class="hint hidden">Normal settings forced for this boundary (very large area, slow). <a href="#" id="slOnBtn">Use super-light preset</a></div>
+        <div id="bigConfirm" class="warn confirm hidden"><div id="bigText"></div>
+          <div class="row"><button id="bigGo" class="primary">Continue</button><button id="bigCancel">Cancel</button></div></div>
+        <table id="counts" class="hidden">
+          <tr><td>Buildings</td><td id="cB">-</td></tr>
+          <tr><td>Roads</td><td id="cR">-</td></tr>
+          <tr><td>Trees</td><td id="cT">-</td></tr>
+          <tr><td>Water</td><td id="cW">-</td></tr>
+        </table>
+        <div id="status" class="msg"></div>
+
+        <div id="reportSec" class="hidden">
+          <div class="lbl">Convert report</div>
+          <div id="repSummary"></div>
+          <div class="legend">
+            <span><i style="background:#9aa0a6"></i>buildings</span>
+            <span><i style="background:#f0a030"></i>roads (width)</span>
+            <span><i style="background:#3b9eff"></i>water</span>
+            <span><i style="background:#4cc38a;border-radius:50%"></i>trees</span>
+          </div>
+          <div id="repApprox" class="approx hidden"></div>
+          <div id="repDisc" class="disc"></div>
+          <details class="plain"><summary>Defaults used / warnings</summary><pre id="repDetail"></pre></details>
+        </div>
+
+        <div class="lbl">Target layer</div>
+        <div class="row">
+          <select id="layerSel" title="Layer for all imported OSM elements"></select>
+          <button id="layerRefresh" title="Reload layers from the open Archicad project">&#8635;</button>
+        </div>
+        <div id="layerWarn" class="warn hidden"></div>
+        <button id="import" class="primary wide" disabled>Import to Archicad</button>
+        <div id="importStatus" class="msg"></div>
+      </div>
+    </details>
+  </aside>
+
+  <main id="map"></main>
+</div>
+
+<footer id="statusbar" aria-label="Info box">
+  <span class="cell"><b>Shape</b> <span id="iShape">-</span></span>
+  <span class="cell"><b>Area</b> <span id="iArea">-</span></span>
+  <span class="cell"><b>Perimeter</b> <span id="iPerim">-</span></span>
+  <span class="cell"><b>Centre</b> <span id="iCentre">-</span></span>
+  <span class="cell job grow" id="jobCell"><b>Job</b> <span id="jobStatus">idle</span></span>
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<script src="coords.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

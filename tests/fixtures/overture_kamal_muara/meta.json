@@ -1,0 +1,113 @@
+{
+  "boundary": {
+    "type": "rectangle",
+    "coordinates": [
+      [
+        106.7191145,
+        -6.0957312
+      ],
+      [
+        106.7204695,
+        -6.0957312
+      ],
+      [
+        106.7204695,
+        -6.0943748
+      ],
+      [
+        106.7191145,
+        -6.0943748
+      ],
+      [
+        106.7191145,
+        -6.0957312
+      ]
+    ]
+  },
+  "bbox": {
+    "south": -6.0957312,
+    "west": 106.7191145,
+    "north": -6.0943748,
+    "east": 106.7204695
+  },
+  "osm_bbox": {
+    "south": -6.096539680057492,
+    "west": 106.71830142371613,
+    "north": -6.093566319942508,
+    "east": 106.72128257628387
+  },
+  "dem_bbox": {
+    "south": -6.096539680057492,
+    "west": 106.71830142371613,
+    "north": -6.093566319942508,
+    "east": 106.72128257628387
+  },
+  "fetched_at": "2026-11-17T04:22:26.481301+00:00",
+  "dem_requested": "auto",
+  "dem_source": "Copernicus GLO-30 (copernicus-dem-30m.s3.amazonaws.com)",
+  "dem_source_id": "copernicus",
+  "dem_attribution": "Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
+  "dem_licence": "Copernicus DEM licence (free use incl. commercial, attribution required)",
+  "dem_vertical_datum": "EGM2008",
+  "dem_accuracy": {
+    "horizontal_m": 30.0,
+    "vertical_m": 5.0,
+    "kind": "DSM",
+    "note": "Copernicus GLO-30 is a SURFACE model (buildings, bridges, vegetation included), ~30 m grid (1 arc-second; coarser in longitude above 50 deg lat). Expect about +-5 m in open terrain and +-10 m or worse in urban/forest areas and on steep slopes."
+  },
+  "dem_crs": "EPSG:4326",
+  "overpass_url": "https://overpass-api.de/api/interpreter",
+  "cache_version": 2,
+  "osm_query_rev": 5,
+  "warnings": [],
+  "dem_fallback_reason": "bw_dgm1 not used: RuntimeError: bbox outside Baden-Wuerttemberg",
+  "osm_base": "2026-11-17T04:22:06Z",
+  "osm_age_days": 0.0,
+  "bridge_chains": {
+    "rounds": 5,
+    "added_ways": 20,
+    "unresolved_ends": 0,
+    "errors": []
+  },
+  "dem_ext": {
+    "source": "copernicus",
+    "points_outside_dem": 32,
+    "points_covered": 32,
+    "bbox": {
+      "south": -6.113589186704995,
+      "west": 106.71667294914407,
+      "north": -6.083437313295005,
+      "east": 106.73115315085593
+    },
+    "shape": [
+      110,
+      53
+    ],
+    "warnings": [],
+    "accuracy": "Copernicus GLO-30 DSM (~30 m); used only for bridge abutment / tunnel portal heights"
+  },
+  "overture": {
+    "status": "ok",
+    "release": "2026-10-21.0",
+    "count": 27,
+    "datasets": {
+      "OpenStreetMap": 11,
+      "Google Open Buildings": 15,
+      "Microsoft ML Buildings": 1
+    },
+    "files_read": [
+      "part-00344-251f976e-d1e8-53b1-9929-076dd86d1b28-c000.zstd.parquet"
+    ],
+    "files_total": 512,
+    "download_est_bytes": 3606693,
+    "elapsed_s": 6.4,
+    "fetched_at": "2026-11-17T04:48:51.435999+00:00",
+    "attribution": "Buildings: \u00a9 OpenStreetMap contributors (ODbL); Overture Maps Foundation, buildings theme (ODbL), incl. Google Open Buildings (CC BY 4.0), Global ML Building Footprints, Microsoft (ODbL-1.0)",
+    "licence": "ODbL-1.0",
+    "source_credits": [
+      "\u00a9 OpenStreetMap contributors (ODbL-1.0)",
+      "Google Open Buildings (CC BY 4.0)",
+      "Global ML Building Footprints, Microsoft (ODbL-1.0)"
+    ]
+  }
+}
