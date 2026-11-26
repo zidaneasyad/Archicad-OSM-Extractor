@@ -152,7 +152,8 @@ def test_import_guard(client, tmp_path, monkeypatch):
 def test_estimate_endpoint(client, monkeypatch):
     monkeypatch.setattr(server, "get_counts", lambda b, s=None: ({"buildings": 50, "roads": 10, "trees": 5, "water": 1},
                                                                  {"source": "cache", "seconds": 0.01}))
-    d = client.post("/api/estimate", json={"boundary": sq_km2(1), "settings": {"dem_source": "copernicus"}}).json()
+    # sq_km2 lies in Baden-Wuerttemberg: LoD2 off here (tests/test_lod2_convert.py covers the LoD2 estimate)
+    d = client.post("/api/estimate", json={"boundary": sq_km2(1), "settings": {"dem_source": "copernicus", "include": {"lod2": False}}}).json()
     assert d["tier"] == "large" and d["counts_source"] == "cache" and d["elements"]["total"] == 50 + 30 + 5 + 1 + 1
     monkeypatch.setattr(server, "get_counts", lambda b, s=None: (None, {"error": "down"}))
     d = client.post("/api/estimate", json={"boundary": sq_km2(1), "settings": {"dem_source": "copernicus"}}).json()

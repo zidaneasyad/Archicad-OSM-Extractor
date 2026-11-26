@@ -31,6 +31,7 @@ import requests
 
 from . import dem_sources as DS
 from . import overpass as OV
+from . import lod2 as L2
 from . import overture as OVT
 from .boundary import bbox, square_boundary, to_polygon
 
@@ -821,29 +822,48 @@ def _predict_margin(dem_source: str, poly) -> float:
     return DSM_MARGIN_M
 
 
-def _fetch_cached(d: Path, cache_dir: Path, ndom: bool, overture: bool) -> Path:
-    """Complete cache: re-query OSM if the query revision is old, add nDOM / Overture if missing. The Overture
-    download touches no meta.json, so it overlaps the Overpass refresh and the nDOM download; its record is
-    written last."""
+def _lod2_fetch(bb, cache_dir: Path, out: Path, allow_large: bool):
+    """LoD2 3D buildings (osmctx/lod2.py): None when no LoD2 source covers bb, else the meta block (never raises)."""
+    try:
+        region = L2.detect_region(bb)
+    except Exception:  # noqa: BLE001
+        region = None
+    if region is None:
+        return None
+    return L2.try_fetch(bb, cache_dir, out, region=region, allow_large=allow_large)
+
+
+def _fetch_cached(d: Path, cache_dir: Path, ndom: bool, overture: bool, lod2: bool = False,
+                  lod2_allow_large: bool = False) -> Path:
+    """Complete cache: re-query OSM if the query revision is old, add nDOM / Overture / LoD2 if missing. The Overture
+    and LoD2 downloads touch no meta.json, so they overlap the Overpass refresh and the nDOM download; their records
+    are written last."""
     m0 = json.loads((d / "meta.json").read_text(encoding="utf-8"))
-    pool = ThreadPoolExecutor(max_workers=1)
+    pool = ThreadPoolExecutor(max_workers=2)
     try:
         ov_fut = (pool.submit(OVT.try_fetch, OVT.meta_bbox(m0), cache_dir, d / OVT.FILE)
                   if overture and OVT.needs_fetch(d, m0) else None)
+        l2_fut = (pool.submit(_lod2_fetch, L2.meta_bbox(m0), cache_dir, d / L2.FILE, lod2_allow_large)
+                  if lod2 and L2.needs_fetch(d, m0) else None)
         refresh_osm(d)
         if ndom and m0.get("dem_source_id") == "bw_dgm1" and "ndom" not in m0:
             ensure_ndom(d)
-        if ov_fut is not None:
+        l2_res = l2_fut.result() if l2_fut is not None else None
+        if ov_fut is not None or l2_res is not None:
             mp = d / "meta.json"
             meta = json.loads(mp.read_text(encoding="utf-8"))
-            OVT.apply(meta, ov_fut.result())
+            if ov_fut is not None:
+                OVT.apply(meta, ov_fut.result())
+            if l2_res is not None:
+                L2.apply(meta, l2_res)
             _json_dump(mp, meta, indent=2)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     return d
 
 
-def _fetch_fresh(boundary: dict, d: Path, cache_dir: Path, dem_source: str, ndom: bool, overture: bool) -> Path:
+def _fetch_fresh(boundary: dict, d: Path, cache_dir: Path, dem_source: str, ndom: bool, overture: bool,
+                 lod2: bool = False, lod2_allow_large: bool = False) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     poly = to_polygon(boundary)
     bb_osm = bbox(poly)
@@ -859,12 +879,16 @@ def _fetch_fresh(boundary: dict, d: Path, cache_dir: Path, dem_source: str, ndom
     def overture_job(bb):
         return OVT.try_fetch(bb, cache_dir, d / OVT.FILE) if overture else None
 
-    # OSM, Overture and nDOM do not depend on the DEM pixels, only on the context bbox: run them beside the DEM download
-    pool = ThreadPoolExecutor(max_workers=5)
+    def lod2_job(bb):
+        return _lod2_fetch(bb, cache_dir, d / L2.FILE, lod2_allow_large) if lod2 else None
+
+    # OSM, Overture, LoD2 and nDOM do not depend on the DEM pixels, only on the context bbox: run them beside the DEM download
+    pool = ThreadPoolExecutor(max_workers=6)
     try:
         bb_pred = bbox(poly, _predict_margin(dem_source, poly))
         osm_fut = pool.submit(osm_job, bb_pred)
         ov_fut = pool.submit(overture_job, bb_pred) if overture else None
+        l2_fut = pool.submit(lod2_job, bb_pred) if lod2 else None
 
         if dem_source in ("auto", "bw_dgm1"):
             bb_dem = bbox(poly, DEM_MARGIN_M)
@@ -919,11 +943,14 @@ def _fetch_fresh(boundary: dict, d: Path, cache_dir: Path, dem_source: str, ndom
             dem_extra = {"dem_crs": "EPSG:4326"}
 
         bb_ctx = bb_dem  # OSM over the DEM extent so building/forest masks cover every DEM cell
-        if bb_ctx != bb_pred:   # the "auto" guess was wrong: redo OSM + Overture for the real bbox
+        if bb_ctx != bb_pred:   # the "auto" guess was wrong: redo OSM + Overture + LoD2 for the real bbox
             if ov_fut is not None:
                 ov_fut.result()   # same output file: let the stale run finish first
+            if l2_fut is not None:
+                l2_fut.result()
             osm_fut = pool.submit(osm_job, bb_ctx)
             ov_fut = pool.submit(overture_job, bb_ctx) if overture else None
+            l2_fut = pool.submit(lod2_job, bb_ctx) if lod2 else None
         acc = {}
         if used == "file":
             acc["horizontal_m"] = info.get("pixel_m")
@@ -951,12 +978,15 @@ def _fetch_fresh(boundary: dict, d: Path, cache_dir: Path, dem_source: str, ndom
             meta["dem_fallback_reason"] = fallback_reason
         post_process_osm(d, data, url, meta)
         _json_dump(d / "osm.json", data)
-        _json_dump(d / "meta.json", meta, indent=2)   # usable cache now; nDOM / Overture records follow
-        if ndom_fut is not None or ov_fut is not None:
+        _json_dump(d / "meta.json", meta, indent=2)   # usable cache now; nDOM / Overture / LoD2 records follow
+        l2_res = l2_fut.result() if l2_fut is not None else None
+        if ndom_fut is not None or ov_fut is not None or l2_res is not None:
             if ndom_fut is not None:
                 meta["ndom"] = ndom_fut.result()
             if ov_fut is not None:
                 OVT.apply(meta, ov_fut.result())
+            if l2_res is not None:
+                L2.apply(meta, l2_res)
             _json_dump(d / "meta.json", meta, indent=2)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -964,18 +994,22 @@ def _fetch_fresh(boundary: dict, d: Path, cache_dir: Path, dem_source: str, ndom
 
 
 def fetch(boundary: dict, cache_dir="cache", dem_source: str = "auto", ndom: bool = True,
-          overture: bool = True) -> Path:
+          overture: bool = True, lod2: bool = True, lod2_allow_large: bool = False) -> Path:
     """Fetch OSM + DEM for `boundary` into cache/<key>/ (key = boundary + dem_source + cache version).
     ndom=False skips the nDOM1 (tree-height) download (super-light preset); an nDOM already in the cache stays.
     overture=True also fetches Overture Maps buildings (osmctx/overture.py, time-boxed, never raises; failure ->
-    meta.json warning + overture.status 'failed'). OSM, Overture and nDOM run concurrently with the DEM download."""
+    meta.json warning + overture.status 'failed'). OSM, Overture and nDOM run concurrently with the DEM download.
+    lod2=True also fetches LoD2 3D buildings (osmctx/lod2.py) where a source covers the site (Baden-Wuerttemberg, NL, CH,
+    JP; same contract: never raises, meta.json ``lod2`` block + warning on failure, never blocks OSM). Japan /
+    Switzerland (~100-170 MB) only with lod2_allow_large=True. lod2.json holds absolute UTM of the bbox centre
+    (origin 0,0); convert re-frames it."""
     if dem_source not in ("auto", *DEM_INFO) and not dem_source.startswith("file:"):
         raise ValueError(f"unknown dem_source {dem_source!r}")
     cache_dir = Path(cache_dir)
     d = cache_dir / cache_key(boundary, dem_source)
     if all((d / f).exists() for f in ("osm.json", "dem.tif", "meta.json")):
-        return _fetch_cached(d, cache_dir, ndom, overture)
-    return _fetch_fresh(boundary, d, cache_dir, dem_source, ndom, overture)
+        return _fetch_cached(d, cache_dir, ndom, overture, lod2, lod2_allow_large)
+    return _fetch_fresh(boundary, d, cache_dir, dem_source, ndom, overture, lod2, lod2_allow_large)
 
 
 def count_categories(osm: dict) -> Counter:
@@ -1037,10 +1071,16 @@ def main():
     ap.add_argument("--cache", default="cache")
     ap.add_argument("--dem-source", default="auto",
                     help="auto | layered | id_demnas | mapterhorn | us_3dep | nl_ahn | fr_ign | uk_ea | "
-                         "no_kartverket | arcticdem | rema | gedtm30 | fabdem | bw_dgm1 | copernicus | file:<path>")
+                         "no_kartverket | arcticdem | rema | gedtm30 | fabdem | vt_vcgi | il_isgs | ky_kyfromabove | "
+                         "cz_cuzk | hk_cedd | au_qld | ee_maaamet | ht_cnigs | jp_gsj | mx_inegi | nz_linz | "
+                         "tz_msimbazi | bw_dgm1 | copernicus | file:<path>  (id_demnas, fabdem, nz_linz, tz_msimbazi "
+                         "are registered but unavailable)")
     ap.add_argument("--no-overture", action="store_true", help="skip the Overture Maps buildings download")
+    ap.add_argument("--no-lod2", action="store_true", help="skip the LoD2 3D buildings download")
+    ap.add_argument("--lod2-allow-large", action="store_true", help="allow the large LoD2 downloads (Japan, Switzerland)")
     a = ap.parse_args()
-    d = fetch(square_boundary(a.lat, a.lon, a.size), a.cache, a.dem_source, overture=not a.no_overture)
+    d = fetch(square_boundary(a.lat, a.lon, a.size), a.cache, a.dem_source, overture=not a.no_overture,
+              lod2=not a.no_lod2, lod2_allow_large=a.lod2_allow_large)
     print("cache:", d.resolve())
     osm = json.loads((d / "osm.json").read_text(encoding="utf-8"))
     for k, v in sorted(count_categories(osm).items()):
@@ -1056,6 +1096,8 @@ def main():
         print("fallback:", meta["dem_fallback_reason"])
     if meta.get("overture"):
         print("overture:", json.dumps(meta["overture"]))
+    if meta.get("lod2"):
+        print("lod2:", json.dumps({k: v for k, v in meta["lod2"].items() if k != "warnings"}))
     for w in meta.get("warnings", []):
         print("WARNING:", w)
 

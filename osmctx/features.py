@@ -16,6 +16,34 @@ Native tool mapping (a gap is logged wherever the tool is a workaround, see out/
   parking/pitch/...   -> Slab 0.05 m on flat ground, draped Mesh on sloped ground
   pier / bridge area  -> Slab at deck height
   power tower/pole    -> Column (default off)
+
+LoD2 buildings (M10 step 7; producer = osmctx/lod2.py + convert, consumer = build_plan.lod2_expand / roof_items /
+lod2_morph_items). Input contract of one site.json `buildings[]` record carrying LoD2 data (site frame metres):
+  {"osm_id": "way/123" (conflated with OSM) | "lod2/<native id>",      # OSM ID property + "Building <id>" group
+   "source": "lod2:<region>",            # e.g. "lod2:lgl-bw" | "lod2:3dbag" | "lod2:swisstopo" | "lod2:plateau"
+   "footprint": [[x, y], ...], "holes": [[[x, y], ...], ...],          # 2D, like every building record
+   "base_z": z,                          # site-relative ground (DEM min under the footprint), like OSM buildings
+   "height": h,                          # m above base_z (ridge / measuredHeight): only used when no plane exists
+   "tags": {...},
+   "lod2": {"region": "de-bw", "dataset": "LGL Baden-Wuerttemberg",   # dataset -> Source "LoD2 (<dataset>)"
+            "lod": "2", "id": "DEBW_...", "ground_z_src": z_src,      # informational
+            "eave_h": h|None, "ridge_h": h|None,                      # informational (geometry wins)
+            "parts": [{"id": "DEBW_..._1", "footprint": [[x, y]..], "holes": [..], "min_h": 0.0,
+                       "top_h": h|None, "eave_h": h|None, "roof_planes": [PLANE, ...]}, ...],   # optional
+            "roof": {"planes": [PLANE, ...]}},                        # optional (alternative to the top-level roof)
+   "roof": {"shape": "lod2", "height": ridge_h - eave_h, "planes": [PLANE, ...]}}   # planes of a part-less building
+  PLANE = {"polygon": [[x, y, z], ...],  # ONE planar RoofSurface ring, z = m ABOVE the building's LoD2 ground
+                                         # (NOT absolute datum heights); open or closed ring, any winding, >= 3 pts
+           "holes": [...]?, "normal": [nx, ny, nz]?, "id": str?}   # optional, ignored (normal is recomputed)
+  Tolerated: a plane given as a bare [[x, y, z], ...] list; a 2D "polygon" plus a same-length "z" list; the
+  osmctx/lod2.py plane record (2D "polygon" + "normal" + "p0" + "z0_h": z_h = z0_h - (nx (x-p0x) + ny (y-p0y)) / nz;
+  its "planar": false or "dev" > LOD2_PLANAR_TOL routes the plane to Morph); planes under part["planes"] /
+  part["roof"]["planes"] / lod2["roof_planes"], plus part["flat_roofs"] (lod2.py keeps flat surfaces apart).
+  Building-level planes are ignored when any part carries planes (duplicate summary), else they go to the part they
+  overlap most. Planes without z are skipped (counted). A part list of one part at min_h 0 = no parts.
+Plane routing (roof_plane_from_polygon): tilt < LOD2_FLAT_DEG -> "flat" (becomes the top of a Slab block, no element);
+LOD2_FLAT_DEG..LOD2_VERTICAL_DEG and planar within LOD2_PLANAR_TOL -> "single" (single-plane Roof tool); tilt >
+LOD2_VERTICAL_DEG or deviation > LOD2_PLANAR_TOL -> "morph" (Morph fallback); area < LOD2_MIN_PLANE_AREA -> "skip".
 """
 from __future__ import annotations
 
@@ -66,6 +94,12 @@ ROOF_SHAPES = {"gabled": "gabled", "hipped": "hipped", "half-hipped": "hipped", 
                "skillion": "skillion", "lean_to": "skillion"}
 MIN_BLOCK_HEIGHT = 0.5          # a roofed block below the roof keeps at least this height
 ROOF_MIN_HEIGHT = 0.3
+# LoD2 roof surfaces (M10): routing thresholds of roof_plane_from_polygon
+LOD2_FLAT_DEG = 1.0             # tilt below this: flat (top of the Slab block)
+LOD2_VERTICAL_DEG = 75.0        # tilt above this: no sensible single-plane Roof -> Morph
+LOD2_PLANAR_TOL = 0.05          # m, max vertex distance from the fitted plane; above -> non-planar -> Morph
+LOD2_MIN_PLANE_AREA = 0.25      # m2 (3D area), smaller surfaces are skipped (counted)
+LOD2_PIVOT_PAD = 0.5            # m, pivot line runs this far past the polygon on both ends (as the skillion code)
 GROUND_FLAT_SPREAD = 0.3        # m of terrain spread under the polygon: <= flat Slab, > draped Mesh
 GROUND_KINDS = ("parking", "pitch", "playground", "pedestrian", "road_area", "square")
 # surface tag -> canonical building material name the builder resolves in the open project
@@ -417,10 +451,14 @@ def roof_basis(poly: Polygon, shape: str, orientation=None, direction=None) -> d
     return {"center": ctr, "u": u, "v": v, "L": L, "W": W, "span": max(W / 2.0, 0.1)}
 
 
-def roof_planes(poly: Polygon, roof: dict) -> list[dict]:
+def roof_planes(poly: Polygon, roof: dict, thickness: float = 0.2) -> list[dict]:
     """Roof as Archicad-agnostic planes: [{"kind": "single", "polygon": [[x,y]..], "pivot": [[x,y],[x,y]], "angle": rad,
     "pivot_rise": m}] (pivot_rise = height of the pivot line above the roof base = eave top) or [{"kind": "multi",
-    "polygon", "angle", "rise"}]. skillion/gabled -> single-plane roofs, hipped/pyramidal -> one multi-plane roof."""
+    "polygon", "angle", "rise"}]. skillion/gabled -> single-plane roofs, hipped/pyramidal -> one multi-plane roof.
+    LoD2 (roof["planes"] present): one roof_plane_from_polygon(...) record per plane (kinds single|flat|morph|skip,
+    z / level relative to the building's LoD2 ground; `thickness` = Roof thickness for the underside level)."""
+    if roof.get("planes") is not None:
+        return [classify_plane(p, thickness) for p in roof["planes"]]
     shape, rh = roof["shape"], float(roof["height"])
     b = roof_basis(poly, shape, roof.get("orientation"), roof.get("direction"))
     ang = math.atan2(rh, b["span"])
@@ -450,6 +488,181 @@ def roof_planes(poly: Polygon, roof: dict) -> list[dict]:
             planes.append({"kind": "single", "polygon": [[float(x), float(y)] for x, y in list(g.exterior.coords)[:-1]],
                            "pivot": [(c - d * hl).tolist(), (c + d * hl).tolist()], "angle": ang, "pivot_rise": rh})
     return planes
+
+
+# ---------------------------------------------------------------- LoD2 roof surfaces (pure geometry, M10)
+def is_lod2(b: dict) -> bool:
+    """True for a building / part record that came from a LoD2 dataset (see the module doc contract)."""
+    return bool(b.get("lod2")) or str(b.get("source") or "").startswith("lod2:")
+
+
+def plane_points(plane) -> list | None:
+    """A LoD2 PLANE (contract in the module doc) -> [[x, y, z], ...] open ring, or None when it carries no z."""
+    if isinstance(plane, dict):
+        ring = plane.get("polygon") or plane.get("ring") or []
+        zs = plane.get("z")
+    else:
+        ring, zs = plane or [], None
+    try:
+        pts = [[float(p[0]), float(p[1]), float(p[2])] for p in ring] if ring and len(ring[0]) >= 3 else None
+        if pts is None and zs is not None and len(zs) == len(ring):
+            pts = [[float(p[0]), float(p[1]), float(z)] for p, z in zip(ring, zs)]
+        if pts is None and isinstance(plane, dict) and plane.get("normal") and plane.get("p0") is not None \
+                and plane.get("z0_h") is not None:
+            # osmctx/lod2.py record: 2D ring + plane z_h = z0_h - (nx (x - p0x) + ny (y - p0y)) / nz
+            nx, ny, nz = (float(v) for v in plane["normal"][:3])
+            if abs(nz) < 1e-9:
+                return None
+            px, py, z0 = float(plane["p0"][0]), float(plane["p0"][1]), float(plane["z0_h"])
+            pts = [[float(p[0]), float(p[1]), z0 - (nx * (float(p[0]) - px) + ny * (float(p[1]) - py)) / nz]
+                   for p in ring]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not pts:
+        return None
+    if len(pts) > 1 and all(abs(a - b) < 1e-9 for a, b in zip(pts[0], pts[-1])):
+        pts = pts[:-1]
+    return pts
+
+
+def _dedupe_ring(P: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Drop consecutive duplicate points (incl. last == first)."""
+    keep = [0]
+    for i in range(1, len(P)):
+        if np.abs(P[i] - P[keep[-1]]).max() > eps:
+            keep.append(i)
+    if len(keep) > 1 and np.abs(P[keep[-1]] - P[keep[0]]).max() <= eps:
+        keep.pop()
+    return P[keep]
+
+
+def newell_normal(P: np.ndarray) -> np.ndarray:
+    """Newell normal of a 3D ring (length = 2 x area, direction by the right-hand rule of the winding)."""
+    Q = np.roll(P, -1, axis=0)
+    return np.array([np.sum((P[:, 1] - Q[:, 1]) * (P[:, 2] + Q[:, 2])),
+                     np.sum((P[:, 2] - Q[:, 2]) * (P[:, 0] + Q[:, 0])),
+                     np.sum((P[:, 0] - Q[:, 0]) * (P[:, 1] + Q[:, 1]))])
+
+
+def roof_plane_from_polygon(poly3d, thickness: float, flat_deg: float = LOD2_FLAT_DEG,
+                            vertical_deg: float = LOD2_VERTICAL_DEG, planar_tol: float = LOD2_PLANAR_TOL,
+                            min_area: float = LOD2_MIN_PLANE_AREA) -> dict:
+    """One LoD2 RoofSurface ring [[x, y, z], ...] -> single-plane Roof inputs (recon 2026-11-24 steps 1-6).
+
+    1. Newell normal n, flipped so nz > 0. 2. tilt = acos(nz). 3. uphill unit u = -(nx, ny)/|.|, pivot direction
+    d = (u_y, -u_x): the plane rises to the LEFT of d (same convention as the skillion roof in roof_planes).
+    4. pivot line through the lowest vertex P0 (z0 = fitted-plane z there), half length = max |(v - P0).d| + pad.
+    5. level = z0 - thickness / cos(tilt): the Roof underside at the pivot; the LoD2 surface is the Roof's TOP face
+    (vertical edges, so the top face at vertex v is exactly z_v and zMax = max z). 6. polygon = ring projected to XY.
+    -> {"kind": "single"|"flat"|"morph"|"skip", "reason", "polygon" [[x, y]], "polygon3d", "normal", "tilt" rad,
+        "angle" rad (0 for flat), "azimuth_deg" (compass direction the surface faces = falls to), "pivot" [[x,y],[x,y]],
+        "level", "z_min", "z_max", "z_centroid" (plane z at the 2D centroid, for volume-equivalent blocks),
+        "deviation" m, "area" m2 (3D), "area_xy" m2}. z / level are in the frame of the input z (above LoD2 ground).
+    flat: angle 0, pivot along the longest edge through P0, level = z_max - thickness (a 0-degree Roof if built).
+    morph (near-vertical or non-planar) and skip (degenerate / tiny) carry no pivot/level."""
+    P = np.asarray(poly3d, float)
+    if P.ndim != 2 or P.shape[0] < 3 or P.shape[1] < 3:
+        return {"kind": "skip", "reason": "needs >= 3 xyz points"}
+    P = _dedupe_ring(P[:, :3])
+    if len(P) < 3:
+        return {"kind": "skip", "reason": "needs >= 3 distinct points"}
+    n = newell_normal(P)
+    nl = float(np.linalg.norm(n))
+    area = nl / 2.0
+    base = {"polygon3d": P.round(4).tolist(), "z_min": float(P[:, 2].min()), "z_max": float(P[:, 2].max()),
+            "area": round(area, 4)}
+    if area < min_area:
+        return {**base, "kind": "skip", "reason": f"area {area:.3f} m2 < {min_area}"}
+    nh = n / nl
+    if nh[2] < 0:
+        nh = -nh
+    tilt = math.acos(min(1.0, max(-1.0, float(nh[2]))))
+    c = P.mean(axis=0)
+    dev = float(np.abs((P - c) @ nh).max())
+    ring2d = _dedupe_ring(P[:, :2])
+    pg2 = Polygon(ring2d) if len(ring2d) >= 3 else None
+    area_xy = float(abs(pg2.area)) if pg2 is not None else 0.0
+    base.update(polygon=ring2d.round(4).tolist(), normal=nh.round(6).tolist(), tilt=tilt, deviation=round(dev, 4),
+                area_xy=round(area_xy, 4))
+    if dev > planar_tol:
+        return {**base, "kind": "morph", "reason": f"non-planar ({dev:.3f} m > {planar_tol} m)"}
+    if tilt > math.radians(vertical_deg):
+        return {**base, "kind": "morph", "reason": f"near-vertical ({math.degrees(tilt):.1f} deg > {vertical_deg})"}
+    ctr2 = pg2.centroid if pg2 is not None and area_xy > 1e-9 else None
+    cxy = np.array([ctr2.x, ctr2.y]) if ctr2 is not None else P[:, :2].mean(axis=0)
+
+    def zp(xy):   # z of the fitted plane (through the vertex mean c, normal nh) at plan point(s) xy
+        xy = np.asarray(xy, float)
+        return c[2] - ((xy[..., 0] - c[0]) * nh[0] + (xy[..., 1] - c[1]) * nh[1]) / nh[2]
+
+    if tilt < math.radians(flat_deg):
+        e = np.roll(P[:, :2], -1, axis=0) - P[:, :2]
+        k = int(np.argmax(np.hypot(e[:, 0], e[:, 1])))
+        d = e[k] / max(float(np.hypot(*e[k])), 1e-12)
+        p0 = P[int(np.argmin(P[:, 2])), :2]
+        h = float(np.abs((P[:, :2] - p0) @ d).max()) + LOD2_PIVOT_PAD
+        return {**base, "kind": "flat", "reason": f"tilt {math.degrees(tilt):.2f} deg < {flat_deg}", "angle": 0.0,
+                "azimuth_deg": None, "pivot": [(p0 - d * h).tolist(), (p0 + d * h).tolist()],
+                "level": base["z_max"] - thickness, "z_centroid": float(zp(cxy))}
+    u = -nh[:2] / float(np.hypot(nh[0], nh[1]))
+    d = np.array([u[1], -u[0]])                      # left of d = u (uphill)
+    zv = zp(P[:, :2])
+    i0 = int(np.argmin(zv))
+    p0, z0 = P[i0, :2], float(zv[i0])
+    h = float(np.abs((P[:, :2] - p0) @ d).max()) + LOD2_PIVOT_PAD
+    az = math.degrees(math.atan2(-u[0], -u[1])) % 360.0
+    return {**base, "kind": "single", "reason": f"tilt {math.degrees(tilt):.1f} deg", "angle": tilt,
+            "azimuth_deg": round(az, 3), "pivot": [(p0 - d * h).tolist(), (p0 + d * h).tolist()],
+            "level": z0 - thickness / math.cos(tilt), "z_min": z0, "z_max": float(zv.max()),
+            "z_centroid": float(zp(cxy))}
+
+
+def classify_plane(plane, thickness: float) -> dict:
+    """roof_plane_from_polygon for one contract PLANE; a producer flag `planar: false` or `dev` > LOD2_PLANAR_TOL
+    (lod2.py records carry only the fitted plane, so the raw deviation is lost) routes a would-be Roof to Morph."""
+    pts = plane_points(plane)
+    if pts is None:
+        return {"kind": "skip", "reason": "no xyz polygon"}
+    r = roof_plane_from_polygon(pts, thickness)
+    if r["kind"] in ("single", "flat") and isinstance(plane, dict):
+        try:
+            dev = float(plane.get("dev") or 0.0)
+        except (TypeError, ValueError):
+            dev = 0.0
+        if plane.get("planar") is False or dev > LOD2_PLANAR_TOL:
+            r = dict(r, kind="morph", reason=f"non-planar (producer dev {dev:.3f} m)")
+    return r
+
+
+def triangulate_ring_3d(pts) -> list[tuple[int, int, int]]:
+    """Triangles (index triples into `pts`) of a 3D ring, triangulated in its best-fit plane (constrained Delaunay;
+    fan from vertex 0 when the projection is not a valid polygon). For non-planar Morph fallback faces."""
+    P = np.asarray(pts, float)
+    n = newell_normal(P)
+    nl = float(np.linalg.norm(n))
+    if len(P) < 3 or nl < 1e-12:
+        return []
+    nh = n / nl
+    a = np.array([1.0, 0.0, 0.0]) if abs(nh[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = np.cross(nh, a)
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(nh, e1)
+    uv = np.column_stack([(P - P[0]) @ e1, (P - P[0]) @ e2])
+    pg = Polygon(uv)
+    fan = [(0, i, i + 1) for i in range(1, len(P) - 1)]
+    if len(P) == 3 or not pg.is_valid:
+        return fan
+    key = {(round(float(x), 6), round(float(y), 6)): i for i, (x, y) in enumerate(uv)}
+    tris = []
+    try:
+        for t in shapely.get_parts(shapely.constrained_delaunay_triangles(pg)):
+            ids = [key.get((round(x, 6), round(y, 6))) for x, y in list(t.exterior.coords)[:3]]
+            if None in ids:
+                return fan
+            tris.append(tuple(ids))
+    except Exception:  # noqa: BLE001
+        return fan
+    return tris or fan
 
 
 # ---------------------------------------------------------------- building parts
@@ -493,6 +706,9 @@ def building_parts(cv, buildings: list[dict]) -> tuple[list[dict], list[dict]]:
             if ar >= best:
                 pi, best = int(j), ar
         parent = buildings[pi] if pi is not None else None
+        if parent is not None and is_lod2(parent):     # measured LoD2 geometry wins over OSM building:part tags
+            cv.counts["building_parts_skipped_lod2"] += 1
+            continue
         h, src = C.building_height(t, s)
         if src == "default" and parent is not None:
             h, src = float(parent["height"]), "parent_" + str(parent.get("height_source"))
@@ -550,7 +766,7 @@ def building_parts(cv, buildings: list[dict]) -> tuple[list[dict], list[dict]]:
 def building_roofs(cv, buildings: list[dict]) -> None:
     """Plain buildings (no parts) with roof:shape + roof:height get a `roof` dict (in place)."""
     for b in buildings:
-        if b.get("parts") or b.get("skip_block") or b["tags"].get("osmctx:flag"):
+        if b.get("parts") or b.get("skip_block") or is_lod2(b) or b["tags"].get("osmctx:flag"):
             continue
         t = b["tags"]
         if t.get("roof:shape") not in ROOF_SHAPES or b.get("holes"):

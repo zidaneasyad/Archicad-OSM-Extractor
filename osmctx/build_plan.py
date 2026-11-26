@@ -66,6 +66,8 @@ def building_source(b: dict, default: str) -> str:
     s = str(b.get("source") or "")
     if s.startswith("overture:"):
         return f"Overture Maps ({s.split(':', 1)[1]})"
+    if s.startswith("lod2:"):       # M10: "LoD2 (<dataset>)", dataset label from the lod2 block, else the region id
+        return f"LoD2 ({(b.get('lod2') or {}).get('dataset') or s.split(':', 1)[1]})"
     return default
 
 
@@ -115,6 +117,17 @@ PLAN_FILL_RGB = {
     "buildings": (0.80, 0.80, 0.80),   # light gray
     "roads": (0.38, 0.38, 0.38),       # dark gray
 }
+# 2D style presets (build_ac.apply_plan_styles / pick_contour_pens / apply_terrain_go):
+#   colour = default (PLAN_FILL_RGB, TERRAIN_PLAN_TINT), mono = grey palette below, none = no restyle.
+PLAN_STYLES = ("colour", "mono", "none")
+PLAN_FILL_RGB_MONO = {
+    "water": (0.88, 0.88, 0.88),       # light grey
+    "ground": (0.97, 0.97, 0.97),      # white / very light grey
+    "buildings": (0.55, 0.55, 0.55),   # mid grey
+    "roads": (0.28, 0.28, 0.28),       # dark grey
+}
+MONO_TERRAIN_PLAN_TINT = {"red": 0.97, "green": 0.97, "blue": 0.97}   # GO rule background for the ground Mesh
+CONTOUR_RGB_MONO = {"major": (0.0, 0.0, 0.0), "minor": (0.5, 0.5, 0.5)}   # black major, mid-grey minor
 
 
 def terrain_style_params(style: str = "clean") -> dict:
@@ -125,7 +138,7 @@ def terrain_style_params(style: str = "clean") -> dict:
 
 
 TERRAIN_POINT_MODES = ("points", "rows")
-CONTOUR_TYPES = ("mesh", "stepped")
+CONTOUR_TYPES = ("mesh", "stepped", "morph", "gdl")   # stepped = Slab terrain; morph/gdl = M11 3D contours
 
 
 def _check_point_mode(mode: str) -> str:
@@ -697,6 +710,8 @@ def roof_items(owner: dict, dz: float = 0.0) -> list[dict]:
     r = owner.get("roof")
     if not r:
         return []
+    if r.get("planes") is not None:
+        return _lod2_roof_items(owner, r, dz)
     poly = Polygon(owner["footprint"])
     top = owner["base_z"] + float(owner["height"]) - float(r["height"]) + dz   # eave z = top of the block
     out = []
@@ -722,6 +737,369 @@ def roof_items(owner: dict, dz: float = 0.0) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------------ LoD2 buildings (M10 step 7)
+# Input contract: osmctx/features.py module doc. Mapping (user decision 2026-11-24): Slab block(s) from the ground up to
+# the eave + one single-plane Roof (Roof tool) per planar roof surface; Morph only for surfaces the Roof tool cannot
+# take (near-vertical / non-planar). lod2_expand() turns LoD2 building records into the M6 shapes the builder already
+# handles (buildings + building_parts with skip_block, roof dicts), so build_ac / verify / group_plan stay generic.
+LOD2_MAX_ROOFS = 400        # default cap on LoD2 Roof + Morph elements per build (recon: ~550 on a dense 300 m site;
+                            # M6: Archicad hung at 753 beams + roofs). Setting `lod2_max_roofs`, < 0 = no cap
+LOD2_MODES = ("roofs", "blocks")   # blocks = one flat volume-equivalent Slab per LoD2 building (super-light)
+LOD2_BLOCK_TOL = ROOF_THICKNESS    # m: roof surfaces whose block heights differ by <= this share one block at the
+                                   # lowest height (the Roof's T/cos underside closes the gap)
+LOD2_MIN_REGION = 1.0       # m2: block pieces smaller than this are merged into the main block / dropped (slivers)
+LOD2_MORPH_EDGES = "HardVisible"
+
+
+def _polygonal(g, min_area: float = 1e-4):
+    """Polygon / MultiPolygon part of any geometry (GeometryCollection from make_valid / overlays), or None."""
+    if g is None or g.is_empty:
+        return None
+    if not g.is_valid:
+        g = shapely.make_valid(g)
+    parts = [p for p in shapely.get_parts(g) if p.geom_type in ("Polygon", "MultiPolygon")]
+    parts = [q for p in parts for q in shapely.get_parts(p) if q.area >= min_area]
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else shapely.MultiPolygon(parts)
+
+
+def _poly(ring, holes=()):
+    try:
+        return _polygonal(Polygon([tuple(p[:2]) for p in ring],
+                                  [[tuple(q[:2]) for q in h] for h in (holes or []) if len(h) >= 3]))
+    except (ValueError, TypeError, shapely.errors.GEOSException):
+        return None
+
+
+def _lod2_planes_of(src) -> list:
+    """Contract PLANEs of a building / part / lod2 block: roof_planes | planes | roof.planes, plus flat_roofs (the
+    osmctx/lod2.py record keeps flat surfaces apart)."""
+    if not isinstance(src, dict):
+        return []
+    out = []
+    for key in ("roof_planes", "planes"):
+        if isinstance(src.get(key), list):
+            out = list(src[key])
+            break
+    else:
+        r = src.get("roof")
+        if isinstance(r, dict) and isinstance(r.get("planes"), list):
+            out = list(r["planes"])
+    if isinstance(src.get("flat_roofs"), list):
+        out += list(src["flat_roofs"])
+    return out
+
+
+def _lod2_units(b: dict) -> tuple[list[dict], bool]:
+    """(units, has_parts). Unit = {id, footprint, holes, min_h, planes, fallback_h}: the building itself, or one per
+    LoD2 BuildingPart. Building-level planes are used only when no part carries planes of its own (else they are a
+    duplicate summary); with several parts they go to the part they overlap most."""
+    m = b.get("lod2") or {}
+    parts = [p for p in (m.get("parts") or []) if isinstance(p, dict) and len(p.get("footprint") or []) >= 3]
+    part_planes = any(_lod2_planes_of(p) for p in parts)
+    bplanes = [] if part_planes else (_lod2_planes_of(b) or _lod2_planes_of(m))
+    fallback = float(b.get("height") or 0.0)
+    if not parts or (len(parts) == 1 and float(parts[0].get("min_h") or 0.0) < 0.05):
+        planes = bplanes + (_lod2_planes_of(parts[0]) if parts else [])
+        return [{"id": str(b["osm_id"]), "footprint": b["footprint"], "holes": b.get("holes") or [], "min_h": 0.0,
+                 "planes": planes, "fallback_h": fallback}], False
+    units = [{"id": str(p.get("id") or f"{b['osm_id']}#part{k}"), "footprint": p["footprint"],
+              "holes": p.get("holes") or [], "min_h": float(p.get("min_h") or 0.0), "planes": _lod2_planes_of(p),
+              "fallback_h": float(p.get("top_h") or p.get("eave_h") or fallback)} for k, p in enumerate(parts)]
+    if bplanes:
+        polys = [_poly(u["footprint"], u["holes"]) for u in units]
+        for pl in bplanes:
+            pts = feat.plane_points(pl)
+            q = _poly(pts) if pts and len(pts) >= 3 else None
+            best, j = -1.0, 0
+            for i, up in enumerate(polys):
+                if up is None or q is None:
+                    continue
+                ov = up.intersection(q).area
+                if ov > best:
+                    best, j = ov, i
+            units[j]["planes"].append(pl)
+    return units, True
+
+
+def _lod2_unit_plan(u: dict) -> dict:
+    """Classify the unit's planes and split its footprint into Slab blocks: each plane claims its plan polygon at its
+    block height (single / morph: lowest edge = eave; flat: the surface itself = block top); heights within
+    LOD2_BLOCK_TOL share one block (lowest height); higher blocks win overlaps (dormers); the largest block also takes
+    the footprint no plane covers. -> {cls [(record, plane)], singles, morphs, blocks [(Polygon|None, h)], top}."""
+    cls = []
+    for p in u["planes"]:
+        cls.append((feat.classify_plane(p, ROOF_THICKNESS), p))
+    singles = [p for r, p in cls if r["kind"] == "single"]
+    morphs = [p for r, p in cls if r["kind"] == "morph"]
+    live = [r for r, _p in cls if r["kind"] != "skip"]
+    top = max((r["z_max"] for r in live), default=u["fallback_h"])
+    floor_h = u["min_h"] + MIN_BUILDING_HEIGHT
+    fp = _poly(u["footprint"], u["holes"])
+    hs = []
+    for r in live:
+        h = r["z_max"] if r["kind"] == "flat" else r["z_min"]
+        g = _poly(r["polygon"]) if len(r.get("polygon") or []) >= 3 else None
+        hs.append((h, g))
+    regional = sorted([(h, g) for h, g in hs if g is not None], key=lambda t: t[0])
+    clusters: list = []
+    for h, g in regional:
+        if clusters and h - clusters[-1][0] <= LOD2_BLOCK_TOL:
+            clusters[-1][1].append(g)
+        else:
+            clusters.append([h, [g]])
+    if not hs:
+        blocks = [(fp, max(u["fallback_h"], floor_h))]
+    elif fp is None or len(clusters) <= 1:
+        blocks = [(fp, max(min(h for h, _g in hs), floor_h))]
+    else:
+        regs, taken = [], None
+        for h, gs in reversed(clusters):                     # highest first: it takes the overlaps
+            reg = shapely.union_all(gs).intersection(fp)
+            if taken is not None:
+                reg = reg.difference(taken)
+            reg = _polygonal(reg)
+            if reg is None:
+                continue
+            taken = reg if taken is None else taken.union(reg)
+            regs.append([h, reg])
+        if not regs:
+            return {"cls": cls, "singles": singles, "morphs": morphs, "top": max(top, floor_h),
+                    "blocks": [(fp, max(min(h for h, _g in hs), floor_h))]}
+        main = max(range(len(regs)), key=lambda i: regs[i][1].area)
+        small = [i for i, (_h, g) in enumerate(regs) if g.area < LOD2_MIN_REGION and i != main]
+        rest = fp.difference(taken)
+        regs[main][1] = _polygonal(shapely.union_all([regs[main][1], rest] + [regs[i][1] for i in small])) or regs[main][1]
+        regs = [r_ for i, r_ in enumerate(regs) if i not in small]
+        blocks = [(g, max(h, floor_h)) for h, g in regs]
+        if len(blocks) == 1:
+            blocks = [(fp, blocks[0][1])]
+    return {"cls": cls, "singles": singles, "morphs": morphs, "blocks": blocks, "top": max(top, floor_h)}
+
+
+def _lod2_roof(top, h, singles, morphs):
+    th = _r(max(top, h), 3)
+    return th, {"shape": "lod2", "height": _r(th - _r(h, 3), 3), "planes": singles, "morphs": morphs}
+
+
+def _lod2_emit(b: dict, units_plans, has_parts: bool) -> tuple[dict, list[dict]]:
+    """Full LoD2 building -> (building record, extra part records) in M6 shapes."""
+    if not has_parts and len(units_plans) == 1 and len(units_plans[0][1]["blocks"]) == 1:
+        _u, pl = units_plans[0]
+        h = pl["blocks"][0][1]
+        nb = dict(b)
+        if pl["singles"] or pl["morphs"]:
+            nb["height"], nb["roof"] = _lod2_roof(pl["top"], h, pl["singles"], pl["morphs"])
+        else:
+            nb.pop("roof", None)
+            nb["height"] = _r(h, 3)
+        return nb, []
+    m = b.get("lod2") or {}
+    nb = dict(b, skip_block=True)
+    nb.pop("roof", None)
+    parts = []
+    for u, pl in units_plans:
+        pieces = []
+        for g, h in pl["blocks"]:
+            if g is None:
+                g = _poly(u["footprint"], u["holes"]) or Polygon([tuple(p[:2]) for p in u["footprint"]])
+            got = [p for p in shapely.get_parts(g) if p.area >= LOD2_MIN_REGION] or \
+                  ([max(shapely.get_parts(g), key=lambda p: p.area)] if len(pl["blocks"]) == 1 else [])
+            pieces += [(p, h) for p in got]
+        pieces.sort(key=lambda t: -t[0].area)
+        for k, (p, h) in enumerate(pieces):
+            ext = [[_r(x, 3), _r(y, 3)] for x, y in list(p.exterior.coords)[:-1]]
+            holes = [[[_r(x, 3), _r(y, 3)] for x, y in list(r.coords)[:-1]] for r in p.interiors]
+            rec = {"osm_id": u["id"] if k == 0 else f"{u['id']}#b{k}", "parent": b["osm_id"], "footprint": ext,
+                   "holes": holes, "base_z": b["base_z"], "min_height": _r(u["min_h"], 3), "height": _r(h, 3),
+                   "height_source": "lod2_measured", "source": b.get("source"),
+                   "lod2": {"dataset": m.get("dataset"), "region": m.get("region"), "unit": u["id"]}, "tags": {}}
+            if k == 0 and (pl["singles"] or pl["morphs"]):      # the largest block carries the unit's roof elements
+                rec["height"], rec["roof"] = _lod2_roof(pl["top"], h, pl["singles"], pl["morphs"])
+            parts.append(rec)
+    nb["parts"] = [p["osm_id"] for p in parts]
+    return nb, parts
+
+
+def _lod2_block_height(b: dict, units_plans) -> float:
+    """Volume-equivalent flat block height: area-weighted plane height at each surface's plan centroid (exact volume
+    under planar roofs that tile the footprint), else the record height."""
+    num = den = 0.0
+    for _u, pl in units_plans:
+        for r, _p in pl["cls"]:
+            a = float(r.get("area_xy") or 0.0)
+            if r["kind"] in ("single", "flat"):
+                num, den = num + a * r["z_centroid"], den + a
+            elif r["kind"] == "morph" and a > 0:
+                num, den = num + a * float(np.mean(np.asarray(r["polygon3d"])[:, 2])), den + a
+    h = num / den if den > 0.5 else float(b.get("height") or 0.0)
+    return _r(max(h, MIN_BUILDING_HEIGHT), 3)
+
+
+def lod2_settings(site: dict | None = None, max_roofs=None, mode: str | None = None) -> tuple[int | None, str]:
+    """(cap, mode): arguments > converter settings in site.report.defaults_used.settings (`lod2_max_roofs`,
+    `lod2_mode`, `include.lod2_roofs` False = blocks) > defaults (LOD2_MAX_ROOFS, "roofs"). cap None = no cap."""
+    s = ((((site or {}).get("report") or {}).get("defaults_used") or {}).get("settings")) or {}
+    cap = max_roofs if max_roofs is not None else s.get("lod2_max_roofs")
+    cap = LOD2_MAX_ROOFS if cap is None else int(cap)
+    if mode is None:
+        mode = s.get("lod2_mode") or ("blocks" if (s.get("include") or {}).get("lod2_roofs") is False else "roofs")
+    if mode not in LOD2_MODES:
+        raise ValueError(f"unknown lod2 mode {mode!r} {LOD2_MODES}")
+    return (cap if cap >= 0 else None), mode
+
+
+def lod2_expand(site: dict, max_roofs=None, mode: str | None = None) -> tuple[dict, dict]:
+    """LoD2 building records -> the M6 shapes the builder handles. Returns (site', info); site' is a shallow copy
+    (input untouched; the same object when no LoD2 building is present) with:
+      * one-block buildings: `height` = top, `roof` = {"shape": "lod2", "height": top - eave, "planes": [single-plane
+        PLANEs], "morphs": [Morph PLANEs]} so block_height() = eave and roof_items() builds one Roof per plane;
+      * buildings with LoD2 BuildingParts or several eave heights: `skip_block` + `parts`, one building_parts record per
+        block (bottom = base + min_h, top = block height; the largest block of each unit carries its roof);
+      * degraded buildings (mode "blocks", or the cap: projected Roof + Morph count > cap, most expensive buildings
+        first): one flat block at the volume-equivalent height, no roof (`lod2_degraded`).
+    info (also site'["lod2_plan"], so a second call is a no-op) = {buildings, mode, max_roofs, roofs, morphs, blocks,
+    parts, degraded, roofs_uncapped, over_cap, planes {single, flat, morph, skip}, morph_reasons, datasets, warnings}."""
+    if site.get("lod2_plan") is not None:
+        return site, site["lod2_plan"]
+    blds = site.get("buildings") or []
+    idx = [i for i, b in enumerate(blds) if feat.is_lod2(b)]
+    cap, mode = lod2_settings(site, max_roofs, mode)
+    info = {"buildings": len(idx), "mode": mode, "max_roofs": cap, "roofs": 0, "morphs": 0, "blocks": 0, "parts": 0,
+            "degraded": 0, "roofs_uncapped": 0, "over_cap": False,
+            "planes": {"single": 0, "flat": 0, "morph": 0, "skip": 0}, "morph_reasons": {}, "datasets": [],
+            "warnings": []}
+    if not idx:
+        return site, info
+    an = {}
+    for i in idx:
+        units, has_parts = _lod2_units(blds[i])
+        ups = [(u, _lod2_unit_plan(u)) for u in units]
+        an[i] = (ups, has_parts, sum(len(pl["singles"]) + len(pl["morphs"]) for _u, pl in ups))
+        for _u, pl in ups:
+            for r, _p in pl["cls"]:
+                info["planes"][r["kind"]] += 1
+                if r["kind"] == "morph":
+                    why = str(r.get("reason", "")).split(" ")[0]
+                    info["morph_reasons"][why] = info["morph_reasons"].get(why, 0) + 1
+    total = sum(c for _ups, _hp, c in an.values())
+    info["roofs_uncapped"] = total
+    degrade: set = set()
+    if mode == "blocks":
+        degrade = set(idx)
+    elif cap is not None and total > cap:
+        info["over_cap"] = True
+        left = total
+        for i in sorted(idx, key=lambda i: (-an[i][2], str(blds[i].get("osm_id")))):
+            if left <= cap or an[i][2] == 0:
+                break
+            degrade.add(i)
+            left -= an[i][2]
+        info["warnings"].append(f"LoD2: {total} roof elements (Roof + Morph) exceed lod2_max_roofs={cap}; "
+                                f"{len(degrade)} building(s) with the most roof surfaces built as flat blocks at the "
+                                f"volume-equivalent height instead")
+    if info["planes"]["skip"]:
+        info["warnings"].append(f"LoD2: {info['planes']['skip']} roof surface(s) skipped (degenerate, tiny or no z)")
+    new_b, new_p = [], []
+    for i, b in enumerate(blds):
+        if i not in an:
+            new_b.append(b)
+            continue
+        ups, has_parts, cost = an[i]
+        if i in degrade:
+            nb = dict(b, height=_lod2_block_height(b, ups), lod2_degraded="blocks mode" if mode == "blocks" else "cap")
+            for k in ("roof", "skip_block", "parts"):
+                nb.pop(k, None)
+            new_b.append(nb)
+            info["blocks"] += 1
+            continue
+        nb, parts = _lod2_emit(b, ups, has_parts)
+        new_b.append(nb)
+        new_p += parts
+        info["roofs"] += sum(len(pl["singles"]) for _u, pl in ups)
+        info["morphs"] += sum(len(pl["morphs"]) for _u, pl in ups)
+        info["blocks"] += len(parts) if nb.get("skip_block") else 1
+    info["degraded"] = len(degrade) if mode == "roofs" else 0
+    info["parts"] = len(new_p)
+    info["datasets"] = sorted({str((blds[i].get("lod2") or {}).get("dataset") or blds[i].get("source")) for i in idx})
+    out = dict(site, buildings=new_b, lod2_plan=info)
+    out["building_parts"] = list(site.get("building_parts") or []) + new_p
+    return out, info
+
+
+def lod2_counts(site_or_buildings, max_roofs=None, mode: str | None = None) -> dict:
+    """Projected LoD2 element counts for limits.estimate (pure, no Archicad): {buildings, blocks (Slabs), roofs (Roof
+    tool), morphs, elements = blocks + roofs + morphs, degraded, roofs_uncapped, over_cap, max_roofs, mode}. Takes a
+    site dict or a list of building records (contract in features.py)."""
+    site = site_or_buildings if isinstance(site_or_buildings, dict) else {"buildings": list(site_or_buildings or [])}
+    _s, info = lod2_expand(site, max_roofs=max_roofs, mode=mode)
+    keys = ("buildings", "blocks", "roofs", "morphs", "degraded", "roofs_uncapped", "over_cap", "max_roofs", "mode")
+    out = {k: info[k] for k in keys}
+    out["elements"] = info["blocks"] + info["roofs"] + info["morphs"]
+    return out
+
+
+def _lod2_roof_items(owner: dict, r: dict, dz: float) -> list[dict]:
+    """roof_items for a LoD2 owner: one single-plane Roof per "single" plane (a 0-degree Roof for a "flat" plane that
+    reaches here un-expanded); "morph" / "skip" planes are not Roofs (see lod2_morph_items). z: base_z + plane z."""
+    ground = float(owner["base_z"]) + dz
+    out = []
+    for pl in feat.roof_planes(None, r, ROOF_THICKNESS):
+        if pl["kind"] not in ("single", "flat"):
+            continue
+        item = {"polygonCoordinates": [_p2(q) for q in pl["polygon"]], "thickness": ROOF_THICKNESS,
+                "structureType": "Basic", "floorIndex": 0, "level": _r(ground + pl["level"]),
+                "angle": _r(pl["angle"], 6),
+                "pivotLine": {"begCoordinate": _p2(pl["pivot"][0]), "endCoordinate": _p2(pl["pivot"][1])}}
+        xs = [q[0] for q in pl["polygon"]]
+        ys = [q[1] for q in pl["polygon"]]
+        out.append({"item": item, "check_z": True,
+                    "expected": {"xMin": min(xs), "xMax": max(xs), "yMin": min(ys), "yMax": max(ys),
+                                 "zMax": ground + pl["z_max"]}})
+    return out
+
+
+def lod2_morph_items(owner: dict, dz: float = 0.0) -> list[dict]:
+    """Morph fallback (Tapir CreateMorphs, same body format as terrain_morph) for the LoD2 roof surfaces the Roof tool
+    cannot take: [{"item", "expected" bbox, "check_z"}]. One Surface Morph per surface: a single face when planar
+    (near-vertical case), triangulated in its best-fit plane when not. basePoint = (min x, min y, base_z + dz),
+    vertices local (z = height above the LoD2 ground). Uses roof["morphs"] (lod2_expand) or classifies roof["planes"]."""
+    r = owner.get("roof") or {}
+    if "morphs" in r:
+        polys = [feat.plane_points(p) for p in r.get("morphs") or []]
+    elif r.get("planes") is not None:
+        polys = [feat.plane_points(p) for p in r["planes"] if feat.classify_plane(p, ROOF_THICKNESS)["kind"] == "morph"]
+    else:
+        return []
+    ground = float(owner["base_z"]) + dz
+    out = []
+    for pts in polys:
+        if not pts or len(pts) < 3:
+            continue
+        P = feat._dedupe_ring(np.asarray(pts, float)[:, :3])
+        if len(P) < 3:
+            continue
+        rec = feat.roof_plane_from_polygon(P, ROOF_THICKNESS)
+        if rec["kind"] == "skip":
+            continue
+        if rec["deviation"] <= feat.LOD2_PLANAR_TOL:
+            faces = [{"vertexIds": list(range(len(P)))}]
+        else:
+            faces = [{"vertexIds": list(t)} for t in feat.triangulate_ring_3d(P)]
+        if not faces:
+            continue
+        bx, by = float(P[:, 0].min()), float(P[:, 1].min())
+        item = {"basePoint": {"x": _r(bx), "y": _r(by), "z": _r(ground)},
+                "body": {"bodyType": "Surface", "edgeDefault": LOD2_MORPH_EDGES,
+                         "vertices": [{"x": _r(x - bx), "y": _r(y - by), "z": _r(z)} for x, y, z in P],
+                         "polygons": faces, "wireEdges": []}}
+        out.append({"item": item, "check_z": True, "reason": rec.get("reason"),
+                    "expected": {"xMin": bx, "xMax": float(P[:, 0].max()), "yMin": by, "yMax": float(P[:, 1].max()),
+                                 "zMin": ground + float(P[:, 2].min()), "zMax": ground + float(P[:, 2].max())}})
+    return out
+
+
 def power_column(t: dict, dz: float = 0.0) -> dict:
     w = POWER_COLUMN.get(t.get("kind"), 0.3)
     return {"coordinates": {"x": _r(t["x"]), "y": _r(t["y"]), "z": _r(t["z"] + dz)}, "height": _r(t["height"]),
@@ -735,12 +1113,16 @@ def active_buildings(site: dict) -> list[dict]:
 
 
 def feature_expected(site: dict, fence_tool: str = "railing") -> dict:
-    """Elements the more-features plan creates, per kind."""
+    """Elements the more-features plan creates, per kind (+ "building_morphs" when LoD2 buildings are present; the
+    LoD2 records are expanded with lod2_expand first, as the builder does)."""
+    has_lod2 = any(feat.is_lod2(b) for b in site.get("buildings", []))
+    if has_lod2:
+        site, _info = lod2_expand(site)
     bars = site.get("barriers", [])
     walls = sum(len(barrier_segments(b)) for b in bars if b["tool"] == "wall" or fence_tool == "wall")
     rails = sum(len(barrier_segments(b)) for b in bars if b["tool"] == "railing" and fence_tool != "wall")
     g = site.get("ground_surfaces", [])
-    return {"building_parts": len(site.get("building_parts", [])),
+    out = {"building_parts": len(site.get("building_parts", [])),
             "roofs": sum(len(roof_items(o)) for o in active_buildings(site) + site.get("building_parts", [])),
             "railways": sum(len(road_beams(r)) for r in site.get("railways", [])),
             "rail_platforms": len(site.get("railway_platforms", [])),
@@ -748,6 +1130,10 @@ def feature_expected(site: dict, fence_tool: str = "railing") -> dict:
             "ground_slabs": sum(1 for x in g if ground_is_slab(x)),
             "ground_meshes": len(_cover_parts(site, _sloped_ground(site))),
             "piers": len(site.get("piers", [])), "power": len(site.get("power_towers", []))}
+    if has_lod2:
+        out["building_morphs"] = sum(len(lod2_morph_items(o))
+                                     for o in active_buildings(site) + site.get("building_parts", []))
+    return out
 
 
 # ------------------------------------------------------------------- plan
@@ -812,7 +1198,8 @@ def group_plan(created: dict, top: str = TOP_GROUP):
         "Buildings" group holds a "Buildings (Overture)" subgroup for the Overture Maps gap-fill buildings (ids
                          "overture/<uuid>") when there are >= 2
         "Buildings" group also holds a "Building <osm_id>" subgroup per building with parts and/or a roof
-                         (created kinds building_parts / building_roofs, side map building_parent: part id -> parent id)
+                         (created kinds building_parts / building_roofs / building_morphs (LoD2 Morph fallback),
+                         side map building_parent: part id -> parent id)
         "Contours" group -> "Contours minor" / "Contours major" / "Contour labels" subgroups (2D; created kinds
                          contours_minor|contours_major|contour_labels; subgroups with 1 element dissolve)
       (Shrubs and Hedges are siblings of Trees, not inside it.)
@@ -843,7 +1230,8 @@ def group_plan(created: dict, top: str = TOP_GROUP):
     # building parts + roofs: one subgroup per building ("Building <osm_id>", the block slab joins it)
     parent = created.get("building_parent") or {}
     sub: dict = {}
-    for g, osm in list(created.get("building_parts", [])) + list(created.get("building_roofs", [])):
+    for g, osm in list(created.get("building_parts", [])) + list(created.get("building_roofs", [])) + \
+            list(created.get("building_morphs", [])):
         sub.setdefault(parent.get(osm, osm), []).append(g)
     bld_kids, ov_kids = [], []
     for g, osm in created.get("buildings", []):

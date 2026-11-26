@@ -32,8 +32,9 @@ CLASS_ITEMS = {"terrain": "Terrain", "buildings": "Massing", "roads": "Civil Ele
                "shrubs": "Flora & Fauna", "hedges": "Flora & Fauna", "land_cover": "Terrain",
                # more features (M6): closest existing items of 'Archicad Classification'
                "railways": "Civil Element", "rail_platforms": "Civil Element", "walls": "Wall", "railings": "Railing",
-               "building_parts": "Massing", "building_roofs": "Roof", "ground": "Site Geometry",
-               "piers": "Civil Element", "power": "Civil Element"}
+               "building_parts": "Massing", "building_roofs": "Roof", "ground": "Site Geometry", "contours_3d": "Terrain",
+               "piers": "Civil Element", "power": "Civil Element",
+               "building_morphs": "Roof"}   # M10 LoD2: roof surfaces the Roof tool cannot take (Morph fallback)
 # shrubs + hedges use the template landscape layer (no extra Site-* layer, no extra GO rule)
 LAYERS = {"terrain": "Site & Landscape - Terrain", "buildings": "Site-Context Buildings", "roads": "Site-Roads",
           "trees": "Site-Trees", "water": "Site-Water", "shrubs": "Site & Landscape - General",
@@ -387,8 +388,11 @@ KIND_TYPE_ROLE = {"terrain": ("Mesh", "terrain"), "land_cover": ("Mesh", "land_c
                   "hedges": ("Object", "hedges"), "water": ("Slab", "water"), "building_parts": ("Slab", "buildings"),
                   "building_roofs": ("Roof", "buildings"), "railways": ("Beam", "railways"),
                   "rail_platforms": ("Slab", "railways"), "walls": ("Wall", "walls"), "railings": ("Railing", "walls"),
-                  "piers": ("Slab", "piers"), "power": ("Column", "power")}
-OSM_ELEMENT_TYPES = ("Slab", "Mesh", "Beam", "Object", "Wall", "Railing", "Roof", "Column")
+                  "piers": ("Slab", "piers"), "power": ("Column", "power"),
+                  "contours_3d": ("Morph", "contours"),   # M11 morph terrain: 3D contour wire Morphs
+                  "building_morphs": ("Morph", "buildings")}   # M10 LoD2 roof-surface Morph fallback
+TERRAIN_ELEMENT_TYPE = {"stepped": "Slab", "morph": "Morph", "gdl": "Object"}   # contour_type -> terrain element type (default Mesh)
+OSM_ELEMENT_TYPES = ("Slab", "Mesh", "Beam", "Object", "Wall", "Railing", "Roof", "Column", "Morph")
 
 
 def _elements_by_type(c, types=OSM_ELEMENT_TYPES):
@@ -482,7 +486,7 @@ def set_road_beam_display(c, log, guids, report):
             bad += len(part) - sum(1 for r in res[:len(part)] if r.get("success"))   # missing result = failed
         except ArchicadError as e:
             msg = (f"Tapir ModifyBeams does not expose beam storyVisibility/displayOption ({e}); "
-                   "floorIndex=0 is set at creation (OSMContext add-on sets Home Story Only + Outlines Only natively)")
+                   "floorIndex=0 is set at creation; Home Story Only + Outlines Only are applied afterwards via ModifyBeams (Tapir)")
             report["roads_display"] = {"ok": False, "floorIndex": 0, "note": msg}
             log("  roads display: " + msg)
             return
@@ -580,12 +584,19 @@ CONTOUR_LABEL_HEIGHT_MM = 3.0   # paper mm (text height = this x view scale; 1.5
 CONTOUR_PEN_WEIGHTS = {"minor": 0.13, "major": 0.35}
 
 
-def pick_contour_pens(pens, want=CONTOUR_PEN_WEIGHTS):
+def pick_contour_pens(pens, want=CONTOUR_PEN_WEIGHTS, style="colour"):
     """Pens of the project's pen table -> {"minor": idx, "major": idx, "label": idx, "fill": idx|None, "note": str}.
     pens = [{"index", "weight", "color": {red, green, blue}, "description"}]. Same colour family: the colour (group of
     identical rgb) closest to a brown that has a thin pen (<= 0.2 mm) and a thick pen (0.3-0.4 mm); within it the
     weights closest to `want` (minor 0.13, major 0.35). Label pen = major pen. Fill = first pure-white pen (text
-    background that masks the line under the label)."""
+    background that masks the line under the label).
+    style="mono": major = black-ish grey pen with weight 0.3-0.4, minor = mid-grey pen with weight <= 0.2 (closest
+    to `want`); falls back to the colour logic when no such grey pens exist. "none" has no project-default pen to
+    read (CreatePolylines needs linePenIndex) -> callers use the colour logic."""
+    if style == "mono":
+        mono = _pick_contour_pens_mono(pens, want)
+        if mono is not None:
+            return mono
     groups = {}
     for p in pens:
         col = p["color"]
@@ -612,6 +623,28 @@ def pick_contour_pens(pens, want=CONTOUR_PEN_WEIGHTS):
                     f"major pen {mj['index']} ({mj['weight']} mm, {mj.get('description')})"}
 
 
+def _pick_contour_pens_mono(pens, want):
+    def rgb(p):
+        c_ = p["color"]
+        return (float(c_["red"]), float(c_["green"]), float(c_["blue"]))
+
+    def dist(p, t):
+        return sum((a - b) ** 2 for a, b in zip(rgb(p), t)) ** 0.5
+    greys = [p for p in pens if p["index"] > 0 and max(rgb(p)) - min(rgb(p)) < 0.06]
+    thick = [p for p in greys if 0.3 <= p["weight"] <= 0.4]
+    thin = [p for p in greys if 0 < p["weight"] <= 0.2]
+    if not thick or not thin:
+        return None
+    mj = min(thick, key=lambda p: (round(dist(p, bp.CONTOUR_RGB_MONO["major"]), 3),
+                                   abs(p["weight"] - want["major"]), p["index"]))
+    mn = min(thin, key=lambda p: (round(dist(p, bp.CONTOUR_RGB_MONO["minor"]), 3),
+                                  abs(p["weight"] - want["minor"]), p["index"]))
+    white = next((p["index"] for p in sorted(pens, key=lambda p: p["index"]) if p["index"] > 0
+                  and all(p["color"][k] > 0.999 for k in ("red", "green", "blue"))), None)
+    return {"minor": mn["index"], "major": mj["index"], "label": mj["index"], "fill": white,
+            "note": f"mono: minor pen {mn['index']} ({mn['weight']} mm), major pen {mj['index']} ({mj['weight']} mm)"}
+
+
 def load_pens(c):
     """Pens of the model-view pen table currently active in the open project -> (pens, table name)."""
     def load():
@@ -636,12 +669,23 @@ def find_empty_fill(c):
     return _memo(c, "_empty_fill_cache", load)
 
 
-def pick_plan_pens(pens):
+def _grey_pen_nearest(pens, target):
+    """Index of the pen (index > 0) nearest `target` rgb, restricted to grey pens (chroma < 0.06) when any exist."""
+    def rgb(p):
+        c_ = p["color"]
+        return (float(c_["red"]), float(c_["green"]), float(c_["blue"]))
+    greys = [p for p in pens if max(rgb(p)) - min(rgb(p)) < 0.06] or pens
+    return min(greys, key=lambda p: (sum((a - b) ** 2 for a, b in zip(rgb(p), target)), p["index"]))["index"]
+
+
+def pick_plan_pens(pens, style="colour"):
     """Pick 2D fill pens closest to PLAN_FILL_RGB ('water' light blue, 'ground' light green,
-    'buildings' light gray, 'roads' dark gray)."""
+    'buildings' light gray, 'roads' dark gray). style="mono": nearest GREY pen to PLAN_FILL_RGB_MONO instead."""
     valid = [p for p in pens if p.get("index", 0) > 0]
     if not valid:
         return dict.fromkeys(bp.PLAN_FILL_RGB)
+    if style == "mono":
+        return {k: _grey_pen_nearest(valid, t) for k, t in bp.PLAN_FILL_RGB_MONO.items()}
 
     def rgb(p):
         c_ = p["color"]
@@ -688,8 +732,22 @@ def pick_plan_pens(pens):
     return {k: pick(preds, bp.PLAN_FILL_RGB[k]) for k, preds in rules.items()}
 
 
-def apply_plan_styles(c, log, created, report, contour_type="mesh", ground_slab_guids=None):
-    """Apply 2D cover/cut fill colours directly to created Slabs and road Beams using the project's pen table."""
+PLAN_STYLE_TABLE = """plan_style decision table
+preset  | slab/beam plan fills          | contour pens                         | terrain GO tint
+colour  | PLAN_FILL_RGB (blue/green/..) | brown family, minor 0.13/major 0.35  | light green (TERRAIN_PLAN_TINT)
+mono    | grey: bldg mid, road dark,    | black major (0.35) + grey minor      | very light grey (MONO_TERRAIN_PLAN_TINT)
+        | water light, ground ~white   | (0.13); falls back to colour logic   |
+none    | skipped (project/favorite     | colour logic (CreatePolylines needs  | skipped (no GO rule/combo read or write)
+        | defaults stay)                | a pen; no project default to read)   |"""
+
+
+def apply_plan_styles(c, log, created, report, contour_type="mesh", ground_slab_guids=None, plan_style="colour"):
+    """Apply 2D cover/cut fill colours directly to created Slabs and road Beams using the project's pen table.
+    plan_style: "colour" (default) | "mono" (grey palette, same mechanism) | "none" (no-op: elements keep the
+    defaults from project/favorites). See PLAN_STYLE_TABLE."""
+    if plan_style == "none":
+        report["plan_styles"] = {"skipped": "plan_style none"}
+        return
     try:
         pens_all, table = load_pens(c)
         empty = find_empty_fill(c)
@@ -699,7 +757,7 @@ def apply_plan_styles(c, log, created, report, contour_type="mesh", ground_slab_
     if not empty:
         report["plan_styles"] = {"skipped": "no Empty fill attribute"}
         return
-    plan_pens = pick_plan_pens(pens_all)
+    plan_pens = pick_plan_pens(pens_all, plan_style) if plan_style == "mono" else pick_plan_pens(pens_all)
     slab_groups = [
         ([g for g, _ in created.get("water", [])], plan_pens.get("water")),
         ([g for g, _ in created.get("buildings", [])] + [g for g, _ in created.get("building_parts", [])],
@@ -786,11 +844,11 @@ def delete_old_contours(c, log):
     return n
 
 
-def build_contour_elements(c, log, site, report, lidx, interval, scale, pen_override):
+def build_contour_elements(c, log, site, report, lidx, interval, scale, pen_override, plan_style="colour"):
     """Compute + create contours (polylines minor/major, texts on majors). -> created dict for the groups."""
     con = ct.build_contours(site, interval, scale=scale)
     pens_all, table = load_pens(c)
-    pens = pick_contour_pens(pens_all)
+    pens = pick_contour_pens(pens_all, style=plan_style) if plan_style == "mono" else pick_contour_pens(pens_all)
     for k, v in (pen_override or {}).items():
         if v is not None:
             pens[k] = int(v)
@@ -839,7 +897,8 @@ def build(site_json_path, setup_json_path=None, replace=True, url=None,
           seo_operation="SubtractionUpwards", group=True, tree_mode="full3d", label=False,
           terrain_style="clean", land_cover=True, layer_mode="single", target_layer=None,
           terrain_points="points", contours=True, contour_interval=None, contour_scale=1.0, contour_pens=None,
-          fence_tool="railing", site_data=None, contour_type="mesh"):
+          fence_tool="railing", site_data=None, contour_type="mesh", plan_style="colour", lod2_max_roofs=None,
+          lod2_mode=None):
     t0 = time.time()
     setup_json_path = setup_json_path or paths.setup_json()
     log_path = log_path or paths.OUT_DIR / "build_log.txt"
@@ -850,7 +909,8 @@ def build(site_json_path, setup_json_path=None, replace=True, url=None,
         return _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replace, save, dz,
                            seo_operation, group, tree_mode, label, terrain_style, land_cover, layer_mode,
                            target_layer, terrain_points, contours, contour_interval, contour_scale, contour_pens,
-                           fence_tool, site_data, contour_type)
+                           fence_tool, site_data, contour_type, plan_style=plan_style,
+                           lod2_max_roofs=lod2_max_roofs, lod2_mode=lod2_mode)
     finally:
         getattr(c, "close", lambda: None)()   # test fakes have no close()
         log.close()
@@ -859,9 +919,13 @@ def build(site_json_path, setup_json_path=None, replace=True, url=None,
 def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replace, save, dz,
                 seo_operation, group, tree_mode, label, terrain_style, land_cover, layer_mode,
                 target_layer, terrain_points, contours, contour_interval, contour_scale, contour_pens,
-                fence_tool, site_data, contour_type="mesh"):
+                fence_tool, site_data, contour_type="mesh", plan_style="colour", lod2_max_roofs=None, lod2_mode=None):
+    if plan_style not in bp.PLAN_STYLES:
+        raise ArchicadError(f"unknown plan_style '{plan_style}' {bp.PLAN_STYLES}")
     if contour_type not in bp.CONTOUR_TYPES:
         raise ArchicadError(f"unknown contour_type '{contour_type}' {bp.CONTOUR_TYPES}")
+    if lod2_mode is not None and lod2_mode not in bp.LOD2_MODES:
+        raise ArchicadError(f"unknown lod2_mode '{lod2_mode}' {bp.LOD2_MODES}")
     site = site_data if site_data is not None else json.loads(Path(site_json_path).read_text(encoding="utf-8"))
     setup = json.loads(Path(setup_json_path).read_text(encoding="utf-8"))
     rec = setup["recommended_attributes"]
@@ -878,6 +942,15 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
 
     report = {"site": str(site_json_path), "started": dt.datetime.now().isoformat(timespec="seconds"),
               "created": {}, "expected": {}, "errors": {}, "gaps": [], "checks": {}, "layers": {}}
+    # M10 LoD2: measured buildings -> blocks (+ parts) with roof planes in the M6 shapes (pure; no-op without LoD2)
+    site, lod2_info = bp.lod2_expand(site, max_roofs=lod2_max_roofs, mode=lod2_mode)
+    if lod2_info["buildings"]:
+        report["lod2"] = lod2_info
+        log(f"LoD2: {lod2_info['buildings']} buildings, mode {lod2_info['mode']}, {lod2_info['blocks']} blocks, "
+            f"{lod2_info['roofs']} roofs, {lod2_info['morphs']} morphs, {lod2_info['degraded']} degraded "
+            f"(cap {lod2_info['max_roofs']})")
+        for w in lod2_info["warnings"]:
+            log("WARNING " + w)
 
     info = c.tapir("GetProjectInfo")
     log(f"project: {info.get('projectName')} ({info.get('projectPath')}) untitled={info.get('isUntitled')}")
@@ -975,6 +1048,58 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
         log(f"  stepped contour: interval {step_info['interval']} m, {len(step_info['steps'])} step(s), {len(step_items)} slab(s)")
         g, e = run_batches(c, log, "CreateSlabs", "slabsData", step_items, "terrain step slab") if step_items else ([], [])
         finish("terrain", g, ["terrain"] * len(step_items), e, move_layer=None)
+    elif contour_type == "morph":
+        from osmctx import terrain_morph as tm
+        log("terrain (Morph body + 3D contour wire Morphs)")
+        m_items, m_info = tm.terrain_morph_items(site, dz, interval=contour_interval, scale=contour_scale)
+        for w in m_info["warnings"]:
+            report["gaps"].append(f"terrain morph: {w}")
+        body, wires = m_items[:1], m_items[1:]
+        for it in body:
+            it.update(layerIndex=lidx["terrain"], floorIndex=0)
+            if bm:
+                it["buildingMaterialId"] = bm
+        for it in wires:
+            it.update(layerIndex=lidx["contours"], floorIndex=0)
+        expected["terrain"] = len(body)
+        report["terrain_morph"] = {k: m_info[k] for k in ("interval", "triangles", "vertices", "minor_lines", "major_lines")}
+        log(f"  morph: {m_info['triangles']} triangles, {m_info['vertices']} vertices, "
+            f"{len(wires)} contour wire morph(s), interval {m_info['interval']} m")
+        g, e = run_batches(c, log, "CreateMorphs", "morphsData", body, "terrain morph") if body else ([], [])
+        finish("terrain", g, ["terrain"] * len(body), e, move_layer=None)
+        if wires:
+            g, e = run_batches(c, log, "CreateMorphs", "morphsData", wires, "contour morph")
+            finish("contours_3d", g, ["contours_3d"] * len(wires), e, move_layer=None)
+    elif contour_type == "gdl":
+        from osmctx import terrain_gdl as tg
+        log("terrain (generated GDL object: solid + 3D/2D contours)")
+        part, g_info = tg.terrain_gdl_part(site, interval=contour_interval, scale=contour_scale,
+                                           source="OSM Context import")
+        for w in g_info.get("warnings", []):
+            report["gaps"].append(f"terrain gdl: {w}")
+        params = {}
+        try:   # contour pens from the project's pen table, same choice as the 2D polylines
+            pens_all, _t = load_pens(c)
+            pk = pick_contour_pens(pens_all, style=plan_style) if plan_style == "mono" else pick_contour_pens(pens_all)
+            pk.update({k: int(v) for k, v in (contour_pens or {}).items() if v is not None})
+            params = {"penMinor": pk["minor"], "penMajor": pk["major"], "penLabel": pk["label"]}
+        except ArchicadError as e:
+            report["gaps"].append(f"terrain gdl: pen lookup failed, part defaults used ({e})")
+        report["terrain_gdl"] = {"part": part["name"], **{k: v for k, v in g_info.items() if k != "warnings"}}
+        expected["terrain"] = 1
+        try:
+            res = c.tapir("CreateLibraryParts", tg.create_library_parts_params([part]))
+            r0 = (res.get("libraryParts") or res.get("executionResults") or [{}])[0]
+            lp_err = r0.get("error")
+        except ArchicadError as e:
+            lp_err = str(e)
+        if lp_err:
+            report["errors"]["terrain"] = [f"CreateLibraryParts: {lp_err}"]
+            log(f"  terrain GDL part FAILED: {lp_err}")
+        else:
+            obj = tg.terrain_gdl_object(site, part["name"], dz, layer_index=lidx["terrain"], params=params)
+            g, e = run_batches(c, log, "CreateObjects", "objectsData", [obj], "terrain gdl object")
+            finish("terrain", g, ["terrain"], e, move_layer=None)
     else:
         log("terrain mesh")
         mesh = bp.terrain_mesh(site, dz, style=terrain_style, terrain_points=terrain_points)
@@ -1114,7 +1239,7 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
         items.append(it)
     expected["building_parts"] = len(P)
     g, e = run_batches(c, log, "CreateSlabs", "slabsData", items, "part slab") if items else ([], [])
-    finish("building_parts", g, [p_["osm_id"] for p_ in P], e)
+    finish("building_parts", g, [p_["osm_id"] for p_ in P], e, sources=[bp.building_source(p_, source) for p_ in P])
     created["building_parent"] = {p_["osm_id"]: p_["parent"] for p_ in P if p_.get("parent")}
     exp_feat["building_parts"] = [dict(zip(("zMin", "zMax"), bp.part_expected_bbox_z(p_, dz))) for p_ in P]
     R = [(o, ri) for o in B + P for ri in bp.roof_items(o, dz)]
@@ -1124,8 +1249,18 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
     if R and not any(g):
         report["gaps"].append("CreateRoofs failed (" + str(e[:1]) + "): buildings with roof:shape keep the flat block "
                               "(roof element missing); see report.errors.building_roofs")
-    finish("building_roofs", g, [o["osm_id"] for o, _ri in R], e, move_layer=lidx["buildings"])
+    finish("building_roofs", g, [o["osm_id"] for o, _ri in R], e, move_layer=lidx["buildings"],
+           sources=[bp.building_source(o, source) for o, _ri in R])
     exp_feat["building_roofs"] = [{k: v for k, v in ri["expected"].items() if k != "zMax" or ri["check_z"]} for _o, ri in R]
+    # M10 LoD2: roof surfaces the Roof tool cannot take (near-vertical / non-planar) -> Surface Morphs
+    M = [(o, mi) for o in B + P for mi in bp.lod2_morph_items(o, dz)]
+    if M:
+        items = [dict(mi["item"], layerIndex=lidx["buildings"]) for _o, mi in M]
+        expected["building_morphs"] = len(M)
+        g, e = run_batches(c, log, "CreateMorphs", "morphsData", items, "LoD2 roof morph")
+        finish("building_morphs", g, [o["osm_id"] for o, _mi in M], e, move_layer=lidx["buildings"],
+               sources=[bp.building_source(o, source) for o, _mi in M])
+        exp_feat["building_morphs"] = [mi["expected"] for _o, mi in M]
 
     log("railways")
     beam_items, beam_ids, beam_tunnel = [], [], []
@@ -1278,16 +1413,18 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
 
     # (Archicad element type, layer role) -> created count: verify() compares it with the model per type and layer
     for kind, (ty, role) in KIND_TYPE_ROLE.items():
-        if kind == "terrain" and contour_type == "stepped":
-            ty = "Slab"
+        if kind == "terrain" and contour_type in TERRAIN_ELEMENT_TYPE:
+            ty = TERRAIN_ELEMENT_TYPE[contour_type]
         if report["created"].get(kind):
             exp_roles[(ty, role)] = exp_roles.get((ty, role), 0) + report["created"][kind]
     report["expected"] = expected
 
-    if contours:
+    if contours and contour_type == "gdl":
+        report["contours"] = "drawn by the terrain GDL object (2D + 3D); no separate polylines"
+    elif contours:
         try:
             created.update(build_contour_elements(c, log, site, report, lidx, contour_interval, contour_scale,
-                                                  contour_pens))
+                                                  contour_pens, plan_style))
             report["gaps"].append(CONTOUR_GAP)
         except ArchicadError as e:
             report["contours"] = f"failed: {e}"
@@ -1297,7 +1434,9 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
 
     report["gaps"] += known_gaps(struct_prop is not None, cls, site)
     verify(c, log, site, created, expected, report, pid, lidx, dz, exp_roles=exp_roles)
-    apply_plan_styles(c, log, created, report, contour_type=contour_type, ground_slab_guids=ground_slab_guids)
+    report["plan_style"] = plan_style
+    apply_plan_styles(c, log, created, report, contour_type=contour_type, ground_slab_guids=ground_slab_guids,
+                      plan_style=plan_style)
 
     if seo_operation and seo_operation.lower() != "none":
         solid_ops(c, log, created, report, seo_operation)
@@ -1306,7 +1445,7 @@ def _build_impl(c, log, t0, site_json_path, setup_json_path, report_path, replac
         make_groups(c, log, created, report, source.split("build ")[-1])
 
     try:
-        apply_terrain_go(c, log, terrain_style, report)
+        apply_terrain_go(c, log, terrain_style, report, plan_style)
     except ArchicadError as e:
         report["terrain_go"] = f"failed: {e}"
         log(report["terrain_go"])
@@ -1380,9 +1519,17 @@ def _ensure_ground_go_combo(c, log, ground_rule_id):
     return {"combination": aname, "prepended": updated}
 
 
-def apply_terrain_go(c, log, style, report):
+def apply_terrain_go(c, log, style, report, plan_style="colour"):
     """Keep ground Meshes light green on 2D plan via GO rule(s). 'Site-Terrain earth' (when present) and
-    'OSM Context - Ground' (Mesh + Terrain/Site Geometry classification) use Empty fill + light green background."""
+    'OSM Context - Ground' (Mesh + Terrain/Site Geometry classification) use Empty fill + light green background.
+    plan_style "mono": same rules, background = MONO_TERRAIN_PLAN_TINT (very light grey) instead of green.
+    plan_style "none": nothing is read or written (no GO rule/combination change, no combo activation): a GO rule
+    is a restyle, the 3D terrain is unaffected, and an untouched project GO setup is the safest 'no restyle'."""
+    if plan_style == "none":
+        report["terrain_go"] = "skipped: plan_style none"
+        log(report["terrain_go"])
+        return
+    tint = bp.MONO_TERRAIN_PLAN_TINT if plan_style == "mono" else bp.TERRAIN_PLAN_TINT
     rules = c.tapir("GetGraphicOverrideRules", {"includeCriterion": False}).get("graphicOverrideRules", [])
     empty = find_empty_fill(c) if style != "legacy" else None
     every = {"cutFill": True, "coverFill": True, "draftingFill": True}
@@ -1398,7 +1545,7 @@ def apply_terrain_go(c, log, style, report):
         style_new = {"surfaceColor": old.get("surfaceColor") or {"red": 0.749019608, "green": 0.701960784, "blue": 0.6},
                      "surfaceAppliesTo": old.get("surfaceAppliesTo") or {"cutSurface": True, "uncutSurface": True}}
         if style != "legacy":
-            style_new.update(fillType=empty, fillTypeAppliesTo=every, fillBackgroundColor=bp.TERRAIN_PLAN_TINT,
+            style_new.update(fillType=empty, fillTypeAppliesTo=every, fillBackgroundColor=tint,
                              fillBackgroundPenAppliesTo=every)
         res = c.tapir("ModifyGraphicOverrideRules", {"graphicOverrideRules": [
             {"graphicOverrideRuleId": legacy_rule["graphicOverrideRuleId"], "style": style_new}]})["executionResults"]
@@ -1408,7 +1555,7 @@ def apply_terrain_go(c, log, style, report):
 
     if style != "legacy":
         gstyle = {"fillType": empty, "fillTypeAppliesTo": every,
-                  "fillBackgroundColor": bp.TERRAIN_PLAN_TINT, "fillBackgroundPenAppliesTo": every}
+                  "fillBackgroundColor": tint, "fillBackgroundPenAppliesTo": every}
         gcrit = {"and": [
             {"elementType": "Mesh"},
             {"or": [
@@ -1473,7 +1620,7 @@ def known_gaps(have_struct, cls, site=None):
     g = [
         "Roads are Beams (no native road element): CreateBeams has no multi-segment option, so one slanted beam per point pair; "
         "slope via slantAngle, TopCenter anchor, 0.2 m high. Beam segment surfaces cannot be written by the API (building material only). "
-        "Road beams are placed on story 0 (floorIndex=0) with Home Story Only + Outlines Only (applied natively by the OSMContext add-on or via ModifyBeams when supported by the active add-on).",
+        "Road beams are placed on story 0 (floorIndex=0) with Home Story Only + Outlines Only (applied via Tapir ModifyBeams; the OSMContext C++ add-on is parked until Graphisoft's developer ID arrives).",
         "Beam 'Structural Analytical Model Generation' is a read-only built-in property (isEditable=false): roads cannot be excluded "
         "from the analytical model through the API. Human step: select Site-Roads beams > Settings > Structural Analytical Model > uncheck.",
         "Mesh (terrain): CreateMeshes has no layerIndex (set afterwards with SetDetailsOfElements) and no surface parameter; "
@@ -1498,6 +1645,17 @@ def known_gaps(have_struct, cls, site=None):
         g.append("Roofs: the Roof tool has gabled only as two single-plane roofs (pivot on the ridge); hipped/pyramidal = "
                  "multi-plane roof with ONE slope angle (exact for rectangles, approximate on other footprints); no per-edge "
                  "angles, no half-hipped/gambrel/mansard (those keep the flat block). Roof/part surfaces: building material only.")
+    lp = site.get("lod2_plan") or {}
+    if lp.get("buildings"):
+        g.append("LoD2 buildings: Slab block(s) from the ground to the eave (one per eave height / BuildingPart, no wall "
+                 "elements; gable-end triangles stay open as with OSM roofs) + one single-plane Roof per planar roof "
+                 "surface (LoD2 surface = Roof top face, thickness " + str(bp.ROOF_THICKNESS) + " m, no holes: dormer "
+                 "cut-outs ignored). Near-vertical (> " + str(feat.LOD2_VERTICAL_DEG) + " deg) or non-planar surfaces "
+                 "-> Surface Morph (no Roof-tool equivalent)." +
+                 (f" Roof cap lod2_max_roofs={lp.get('max_roofs')}: {lp.get('degraded')} building(s) built as flat "
+                  f"volume-equivalent blocks." if lp.get("degraded") else "") +
+                 (" Mode 'blocks': LoD2 buildings are flat volume-equivalent blocks only." if lp.get("mode") == "blocks"
+                  else ""))
     if site.get("ground_surfaces"):
         g.append("Ground surfaces (parking/pitch/playground/pedestrian/square): flat -> 0.05 m Slab, sloped -> draped Mesh "
                  "(land-cover mechanism); Mesh/Slab surface (asphalt, grass) not settable via the API, only a building "
@@ -1667,6 +1825,8 @@ def main(argv=None):
                     help="tree representation: light (default) | 2d | full3d | lib:<library part name>")
     ap.add_argument("--terrain-style", default="clean", choices=bp.TERRAIN_STYLES,
                     help="terrain plan look: clean (default; user-defined ridges, no triangulation lines, flat earth tint) | legacy (AllSharp)")
+    ap.add_argument("--plan-style", default="colour", choices=bp.PLAN_STYLES,
+                    help="2D plan look: colour (default; coloured fills + terrain tint) | mono (black-and-white site plan, greys) | none (no restyle: project/favorite defaults, no GO tint)")
     ap.add_argument("--contour-type", default="mesh", choices=bp.CONTOUR_TYPES,
                     help="3D terrain model: mesh (default, real contour map) | stepped (stacked horizontal terrace slabs)")
     ap.add_argument("--no-land-cover", action="store_true", help="do not build draped meshes for beach/sand/wetland/tidalflat/mangrove areas")
@@ -1688,6 +1848,12 @@ def main(argv=None):
                     help="put ALL OSM elements on this existing layer (default mode; default layer: 'Site & Landscape - General' if present, else first visible unlocked layer). No layers are created.")
     ap.add_argument("--per-type-layers", action="store_true",
                     help="one Site-* layer per type (creates missing layers + shows them in all layer combinations)")
+    ap.add_argument("--lod2-mode", default=None, choices=bp.LOD2_MODES,
+                    help="LoD2 buildings: roofs (blocks + one Roof per roof surface) | blocks (flat volume-equivalent "
+                         "blocks only, super-light); default from the site settings, else roofs")
+    ap.add_argument("--lod2-max-roofs", type=int, default=None, metavar="N",
+                    help=f"cap on LoD2 Roof + Morph elements (default {bp.LOD2_MAX_ROOFS}; -1 = no cap); above it the "
+                         "buildings with the most roof surfaces become flat blocks")
     a = ap.parse_args(argv)
     if a.layer and a.per_type_layers:
         ap.error("--layer and --per-type-layers are mutually exclusive")
@@ -1696,7 +1862,8 @@ def main(argv=None):
                 terrain_points=a.terrain_points, contours=not a.no_contours, contour_interval=a.contour_interval,
                 contour_scale=a.contour_scale, fence_tool=a.fence_tool,
                 contour_pens={"minor": a.contour_pen_minor, "major": a.contour_pen_major, "label": a.contour_pen_major},
-                contour_type=a.contour_type)
+                contour_type=a.contour_type, plan_style=a.plan_style, lod2_mode=a.lod2_mode,
+                lod2_max_roofs=a.lod2_max_roofs)
     print(json.dumps({k: rep[k] for k in ("created", "expected")}, indent=1))
     return 0
 

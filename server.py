@@ -231,6 +231,28 @@ def count_overture(cache: Path, bb=None) -> int | None:
         return None
 
 
+def count_lod2(cache: Path, bb=None) -> list[dict] | None:
+    """LoD2 building records (lod2.json) of a fetch cache whose centre lies inside bb=(s, w, n, e); None when the cache
+    has no lod2.json (not fetched / failed / no source). Feeds limits.lod2_estimate (exact element count)."""
+    p = Path(cache) / "lod2.json"
+    if not p.exists():
+        return None
+    try:
+        from pyproj import Transformer
+        from osmctx import lod2 as l2m
+        d = l2m.load(p)
+        recs = d.get("buildings") or []
+        if bb is None or not recs:
+            return recs
+        ox, oy = d.get("origin") or (0.0, 0.0)
+        tf = Transformer.from_crs(d["crs"], "EPSG:4326", always_xy=True)
+        lon, lat = tf.transform([(r["bbox"][0] + r["bbox"][2]) / 2 + ox for r in recs],
+                                [(r["bbox"][1] + r["bbox"][3]) / 2 + oy for r in recs])
+        return [r for r, x, y in zip(recs, lon, lat) if bb[0] <= y <= bb[2] and bb[1] <= x <= bb[3]]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def find_cache(boundary: dict, cache_dir: Path = CACHE_DIR, dem_source: str = "auto"):
     """Existing fetch cache dir for this boundary (any DEM source), or None."""
     try:
@@ -265,7 +287,7 @@ def race_overpass(q: str, urls=None, timeout: float = COUNT_TIMEOUT_S, post=None
 
 # ---------------------------------------------------------------- settings mapping / accuracy text
 _NON_CONVERT_KEYS = frozenset(("dem_source", "dem_file", "tree_mode", "tree_lib", "override", "skip_ndom", "hillshade",
-                               "contour_type"))   # fetch-only / builder-only / UI keys
+                               "contour_type", "plan_style"))   # fetch-only / builder-only / UI keys
 
 
 def map_settings(ui: dict | None) -> dict:
@@ -310,9 +332,10 @@ OVERTURE_CREDIT_GENERIC = ("Buildings: © OpenStreetMap contributors (ODbL); Ove
 
 
 def disclaimer(acc: dict | None = None, attribution: str | None = None, licence: str | None = None,
-               overture: dict | None = None) -> dict:
+               overture: dict | None = None, lod2: dict | None = None) -> dict:
     """Accuracy disclaimer. acc = report.dem_accuracy (None before fetch -> GLO-30 defaults).
-    overture = report.info.overture (None before convert -> generic Overture line, as the checkbox is on by default)."""
+    overture = report.info.overture (None before convert -> generic Overture line, as the checkbox is on by default).
+    lod2 = report.info.lod2: when applied, the region's credit line (osmctx.lod2.attribution_block)."""
     a = dict(GLO30_ACC)
     a.update({k: v for k, v in (acc or {}).items() if v is not None})
     src = a.get("source") or GLO30_ACC["source"]
@@ -337,6 +360,9 @@ def disclaimer(acc: dict | None = None, attribution: str | None = None, licence:
         credits.append(OVERTURE_CREDIT_GENERIC)
     elif overture.get("applied") and overture.get("attribution"):
         credits.append(overture["attribution"])
+    if lod2 and lod2.get("applied") and lod2.get("region"):
+        from osmctx import lod2 as l2m
+        credits.append(lod2.get("attribution") or l2m.attribution_block(lod2["region"])["attribution"])
     if attr:
         credits.append(attr + (f" — licence: {lic}" if lic else ""))
     return {"text": text, "credits": credits}
@@ -585,8 +611,16 @@ def api_estimate(body: dict = Body(...)):
     except Exception:  # noqa: BLE001
         tiles = {"source": "unknown", "dgm1_total": 0, "dgm1_missing": 0, "ndom_total": 0, "ndom_missing": 0,
                  "copernicus_tiles": 0}
+    lod2_est = None
+    if not g["blocked"]:
+        try:   # exact from a fetched lod2.json, else a per-region prior from the bbox
+            bb = boundary_bbox(b)
+            cached = find_cache(b, dem_source=src)
+            lod2_est = limits.lod2_estimate(g["settings"], bb, count_lod2(cached, bb) if cached is not None else None)
+        except Exception:  # noqa: BLE001
+            lod2_est = None
     est = limits.estimate(g["area_km2"], counts, info.get("source", "area"), tiles, preset=bool(g["preset"]),
-                          settings=g["settings"])
+                          settings=g["settings"], lod2=lod2_est)
     return {**est, "tier": g["tier"], "preset": g["preset"], "override": g["override"], "blocked": g["blocked"],
             "message": g["message"], "counts": counts, "counts_info": info}
 
@@ -628,7 +662,8 @@ def _dem_wgs84_bounds(cache: Path, meta: dict | None = None) -> list[float] | No
     return None
 
 
-def _run_fetch_job(jid: str, boundary: dict, dem_source: str, skip_ndom: bool = False, overture: bool = True):
+def _run_fetch_job(jid: str, boundary: dict, dem_source: str, skip_ndom: bool = False, overture: bool = True,
+                   lod2: bool = True, lod2_allow_large: bool = False):
     from osmctx.fetch import fetch
     job = _jobs[jid]
     t0 = time.monotonic()
@@ -642,7 +677,8 @@ def _run_fetch_job(jid: str, boundary: dict, dem_source: str, skip_ndom: bool = 
     threading.Thread(target=ticker, daemon=True).start()
     try:
         path = fetch(boundary, cache_dir=str(CACHE_DIR), dem_source=dem_source,
-                     **({"ndom": False} if skip_ndom else {}), **({} if overture else {"overture": False}))
+                     **({"ndom": False} if skip_ndom else {}), **({} if overture else {"overture": False}),
+                     **({} if lod2 else {"lod2": False}), **({"lod2_allow_large": True} if lod2_allow_large else {}))
         job.update(state="done", cache=str(path), progress=f"fetched in {time.monotonic() - t0:.1f} s")
     except Exception as ex:  # noqa: BLE001
         job.update(state="error", error=f"{type(ex).__name__}: {ex}", progress="failed")
@@ -668,10 +704,14 @@ def api_fetch(body: dict = Body(...)):
     with _jobs_lock:
         _jobs[jid] = {"state": "running", "progress": "starting", "started": time.time()}
     skip_ndom = bool(g and (g.get("settings") or {}).get("skip_ndom"))  # super-light preset: no nDOM download
-    overture = bool((((g and g.get("settings")) or body.get("settings") or {}).get("include") or {}).get("overture_buildings", True))
-    threading.Thread(target=_run_fetch_job, args=(jid, body["boundary"], src, skip_ndom, overture), daemon=True).start()
+    eff = (g and g.get("settings")) or body.get("settings") or {}
+    overture = bool((eff.get("include") or {}).get("overture_buildings", True))
+    lod2 = bool((eff.get("include") or {}).get("lod2", True))
+    lod2_allow_large = bool(eff.get("lod2_allow_large", False))
+    threading.Thread(target=_run_fetch_job, args=(jid, body["boundary"], src, skip_ndom, overture, lod2, lod2_allow_large),
+                     daemon=True).start()
     return {"job": jid, "tier": g and g["tier"], "preset": g and g["preset"], "skip_ndom": skip_ndom,
-            "overture": overture}
+            "overture": overture, "lod2": lod2, "lod2_allow_large": lod2_allow_large}
 
 
 @app.get("/api/job/{jid}")
@@ -722,7 +762,8 @@ def api_convert(body: dict = Body(default={})):
             "tier": g and g["tier"], "preset": g and g["preset"], "area_km2": g and g["area_km2"],
             "accuracy_notes": accuracy_notes(site),
             "disclaimer": disclaimer(rep.get("dem_accuracy"), dem.get("attribution"), dem.get("licence"),
-                                     (rep.get("info") or {}).get("overture") or {"applied": False})}
+                                     (rep.get("info") or {}).get("overture") or {"applied": False},
+                                     (rep.get("info") or {}).get("lod2"))}
 
 
 @app.get("/api/disclaimer")
@@ -838,8 +879,10 @@ def api_import(body: dict = Body(default={})):
     mode = body.get("layer_mode") or "single"
     tp = body.get("terrain_points") or "points"
     ctype = str(body.get("contour_type") or st.get("contour_type") or "mesh")
+    pstyle = str(body.get("plan_style") or st.get("plan_style") or "colour")
+    from osmctx import build_plan as _bp
     for name, v, allowed in (("layer_mode", mode, ("single", "per_type")), ("terrain_points", tp, ("points", "rows")),
-                             ("contour_type", ctype, ("mesh", "stepped"))):
+                             ("contour_type", ctype, _bp.CONTOUR_TYPES), ("plan_style", pstyle, _bp.PLAN_STYLES)):
         if v not in allowed:
             return JSONResponse({"error": f"{name} must be {'|'.join(allowed)}, got {v!r}", **result}, status_code=400)
     # sun first: the builder saves the project at its end, so the saved file already has the sun settings
@@ -863,7 +906,7 @@ def api_import(body: dict = Body(default={})):
                                 contour_interval=st.get("contour_interval") or None,
                                 contour_scale=float(st.get("contour_interval_scale") or 1.0),
                                 fence_tool=body.get("fence_tool") or "railing", site_data=_site(),
-                                contour_type=ctype)
+                                contour_type=ctype, plan_style=pstyle)
     except Exception as ex:  # noqa: BLE001
         return JSONResponse({"error": f"{type(ex).__name__}: {ex}", **result}, status_code=500)
     return result

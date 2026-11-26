@@ -42,8 +42,8 @@
   // ---------------------------------------------------------------- settings
   const ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary", "tertiary", "residential", "service", "footway", "path", "cycleway", "default"];
   const DEFAULTS = {
-    floor_height_m: 3.2, default_levels: 3, tree_height_m: 8, broadleaf_height: 12, conifer_height: 15, broadleaf_crown_ratio: 0.65, conifer_crown_ratio: 0.35, use_genus_table: true, forest_scatter: false, tree_scatter: { mangrove: true, orchard: true, plant_nursery: true, park: true }, tree_mode: "full3d", tree_lib: "", dem_source: "auto", dem_file: "", ground_mode: "auto", hillshade: false, contour_type: "mesh", contours: true, contour_interval: null,
-    include: { terrain: true, buildings: true, overture_buildings: true, roads: true, trees: true, water: true, shrubs: true, railways: true, walls: true, building_parts: true, ground: true, piers: true, power: false },
+    floor_height_m: 3.2, default_levels: 3, tree_height_m: 8, broadleaf_height: 12, conifer_height: 15, broadleaf_crown_ratio: 0.65, conifer_crown_ratio: 0.35, use_genus_table: true, lod2_allow_large: false, forest_scatter: false, tree_scatter: { mangrove: true, orchard: true, plant_nursery: true, park: true }, tree_mode: "full3d", tree_lib: "", dem_source: "auto", dem_file: "", ground_mode: "auto", hillshade: false, contour_type: "mesh", plan_style: "colour", contours: true, contour_interval: null,
+    include: { terrain: true, buildings: true, overture_buildings: true, lod2: true, lod2_roofs: true, roads: true, trees: true, water: true, shrubs: true, railways: true, walls: true, building_parts: true, ground: true, piers: true, power: false },
     road_widths: { motorway: 12, trunk: 10, primary: 8, secondary: 7, tertiary: 6, residential: 5, service: 3.5, footway: 2, path: 2, cycleway: 2, default: 4 },
   };
   const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -78,8 +78,11 @@
       $(id).addEventListener("change", () => { settings[key] = $(id).value; saveSettings(); $("demFileRow").classList.toggle("hidden", settings.dem_source !== "file"); });
     });
     $("s_treemode").addEventListener("change", () => { settings.tree_mode = $("s_treemode").value; saveSettings(); $("treeLibRow").classList.toggle("hidden", settings.tree_mode !== "lib"); });
-    $("s_ctype").addEventListener("change", () => { settings.contour_type = $("s_ctype").value; $("s_cint").disabled = !settings.contours && settings.contour_type !== "stepped"; saveSettings(); });
-    $("s_contours").addEventListener("change", () => { settings.contours = $("s_contours").checked; $("s_cint").disabled = !settings.contours && settings.contour_type !== "stepped"; saveSettings(); });
+    const syncTerrainSub = () => { $("s_tsub_row").style.display = ["morph", "gdl"].includes(settings.contour_type) ? "" : "none"; };
+    $("s_tsub").addEventListener("change", () => { settings.contour_type = $("s_tsub").value; syncTerrainSub(); saveSettings(); });
+    $("s_pstyle").addEventListener("change", () => { settings.plan_style = $("s_pstyle").value; saveSettings(); });
+    $("s_ctype").addEventListener("change", () => { settings.contour_type = $("s_ctype").value === "morph" ? $("s_tsub").value : $("s_ctype").value; syncTerrainSub(); $("s_cint").disabled = !settings.contours && !["stepped", "morph", "gdl"].includes(settings.contour_type); saveSettings(); });
+    $("s_contours").addEventListener("change", () => { settings.contours = $("s_contours").checked; $("s_cint").disabled = !settings.contours && !["stepped", "morph", "gdl"].includes(settings.contour_type); saveSettings(); });
     $("s_hillshade").addEventListener("change", () => { settings.hillshade = $("s_hillshade").checked; saveSettings(); updateHillshadeOverlay(); });
     $("s_cint").addEventListener("change", () => { const v = parseFloat($("s_cint").value); settings.contour_interval = v > 0 ? v : null; saveSettings(); });
     $("s_genus").addEventListener("change", () => { settings.use_genus_table = $("s_genus").checked; saveSettings(); });
@@ -88,6 +91,7 @@
     $("s_treelib").addEventListener("change", () => { settings.tree_lib = $("s_treelib").value.trim(); saveSettings(); });
     $("s_demfile").addEventListener("change", () => { settings.dem_file = $("s_demfile").value.trim(); saveSettings(); });
     Object.keys(DEFAULTS.include).forEach((k) => $("i_" + k).addEventListener("change", () => { settings.include[k] = $("i_" + k).checked; saveSettings(); }));
+    $("s_lod2_large").addEventListener("change", () => { settings.lod2_allow_large = $("s_lod2_large").checked; saveSettings(); });
     $("resetSettings").addEventListener("click", () => { settings = clone(DEFAULTS); saveSettings(); fillSettingsUI(); });
     fillSettingsUI();
   }
@@ -96,8 +100,11 @@
     $("s_bh").value = settings.broadleaf_height; $("s_ch").value = settings.conifer_height;
     $("s_bcr").value = settings.broadleaf_crown_ratio; $("s_ccr").value = settings.conifer_crown_ratio; $("s_genus").checked = !!settings.use_genus_table;
     $("s_forest").checked = !!settings.forest_scatter;
-    $("s_ctype").value = settings.contour_type || "mesh";
-    $("s_contours").checked = settings.contours !== false; $("s_cint").value = settings.contour_interval ? String(settings.contour_interval) : ""; $("s_cint").disabled = settings.contours === false && settings.contour_type !== "stepped";
+    { const ct = settings.contour_type || "mesh"; const sub = ["morph", "gdl"].includes(ct);
+      $("s_ctype").value = sub ? "morph" : ct; if (sub && [...$("s_tsub").options].some(o => o.value === ct)) $("s_tsub").value = ct;
+      $("s_tsub_row").style.display = sub ? "" : "none"; }
+    $("s_pstyle").value = settings.plan_style || "colour";
+    $("s_contours").checked = settings.contours !== false; $("s_cint").value = settings.contour_interval ? String(settings.contour_interval) : ""; $("s_cint").disabled = settings.contours === false && !["stepped", "morph", "gdl"].includes(settings.contour_type);
     $("s_hillshade").checked = !!settings.hillshade;
     Object.keys(DEFAULTS.tree_scatter).forEach((k) => { $("s_ts_" + k).checked = !!settings.tree_scatter[k]; });
     $("s_dem").value = settings.dem_source; $("s_ground").value = settings.ground_mode; $("s_demfile").value = settings.dem_file;
@@ -105,6 +112,7 @@
     $("s_treemode").value = settings.tree_mode; $("s_treelib").value = settings.tree_lib;
     $("treeLibRow").classList.toggle("hidden", settings.tree_mode !== "lib");
     Object.keys(DEFAULTS.include).forEach((k) => { $("i_" + k).checked = !!settings.include[k]; });
+    $("s_lod2_large").checked = !!settings.lod2_allow_large;
     ROAD_CLASSES.forEach((c) => { $("rw_" + c).value = settings.road_widths[c]; });
   }
 
@@ -404,8 +412,12 @@
     const rep = d.report, c = rep.counts || {}, acc = rep.dem_accuracy || {}, dem = (rep.info || {}).dem || {};
     const dflt = rep.defaults_used || {};
     const n = (v) => (v == null ? 0 : v);
+    const l2 = (rep.info || {}).lod2 || {};
+    // building sources: "N OSM + M Overture + K LoD2 (R replaced)" when LoD2 was used, else the Overture split
+    const bsrc = l2.applied && l2.added ? " (" + esc(l2.summary) + (c.buildings_overture ? "; Overture estimated" : "") + ")"
+      : (c.buildings_overture ? " (" + n(c.buildings_osm) + " OSM + " + c.buildings_overture + " Overture Maps, estimated)" : "");
     $("repSummary").innerHTML =
-      "<b>" + n(c.buildings) + "</b> buildings" + (c.buildings_overture ? " (" + n(c.buildings_osm) + " OSM + " + c.buildings_overture + " Overture Maps, estimated)" : "") + ", <b>" + n(c.roads) + "</b> roads, <b>" + n(c.trees) + "</b> trees, <b>" + n(c.water) + "</b> water<br>" +
+      "<b>" + n(c.buildings) + "</b> buildings" + bsrc + ", <b>" + n(c.roads) + "</b> roads, <b>" + n(c.trees) + "</b> trees, <b>" + n(c.water) + "</b> water<br>" +
       "Terrain: <b>" + n(c.terrain_points) + "</b> points; ground " + esc(acc.ground_mode || "?") + "; source " + esc(dem.source || acc.source || "?") + "<br>" +
       "Defaults used: heights " + esc(JSON.stringify(dflt.heights || {})) + "; warnings <b>" + (rep.warnings || []).length + "</b>" +
       (acc.vertical_m != null ? "<br>DEM vertical accuracy: ±" + acc.vertical_m + " m (" + esc(acc.kind || "") + ")" : "");
@@ -569,7 +581,7 @@
     $("import").disabled = true; $("importStatus").className = "msg"; $("importStatus").textContent = "Importing to Archicad (can take a while)..."; jobLine("Importing to Archicad...");
     try {
       const tm = settings.tree_mode === "lib" ? (settings.tree_lib ? "lib:" + settings.tree_lib : "full3d") : (settings.tree_mode || "full3d");
-      const d = await post("/api/import", { sun: { date: $("sunDate").value, time: $("sunTime").value }, tree_mode: tm, contour_type: settings.contour_type || "mesh", boundary: currentBoundary(), settings, override: overrideOn(), ...layerChoice() });
+      const d = await post("/api/import", { sun: { date: $("sunDate").value, time: $("sunTime").value }, tree_mode: tm, contour_type: settings.contour_type || "mesh", plan_style: settings.plan_style || "colour", boundary: currentBoundary(), settings, override: overrideOn(), ...layerChoice() });
       $("importStatus").className = "msg ok";
       $("importStatus").textContent = "Import done." + (d.preset ? " Super-light preset used (2D trees)." : "") + (d.sun_error ? " Sun failed: " + d.sun_error : d.sun ? " Sun set." : "");
       const tw = ((d.build || {}).tree_mode || {}).warnings || [];

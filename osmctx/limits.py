@@ -22,7 +22,8 @@ SUPER_LIGHT = {
     "road_classes_exclude": ["footway", "path", "cycleway", "steps", "service"],
     "include": {"shrubs": False,            # no shrubs/hedges (merged into the UI `include`, other keys kept)
                 "railways": True, "walls": True,   # super-light keeps railways + walls, the other feature types are off
-                "building_parts": False, "ground": False, "piers": False, "power": False},
+                "building_parts": False, "ground": False, "piers": False, "power": False,
+                "lod2_roofs": False},       # LoD2 buildings stay (measured footprints) but as flat blocks: no Roof / Morph elements
     "forest_scatter": False,                # no tree scatter in woods/forests
     "tree_scatter": {"mangrove": False, "orchard": False, "plant_nursery": False, "park": False, "cemetery": False,
                      "forest": False},      # no estimated area trees at all
@@ -185,10 +186,49 @@ def feature_counts(counts: dict | None, settings: dict | None, preset: bool = Fa
             "power_towers": int(c.get("power_towers", 0)) if on("power") else 0}
 
 
+LOD2_DEFAULT_MAX_ROOFS = 400   # = build_plan.LOD2_MAX_ROOFS
+
+
+def lod2_estimate(settings: dict | None, bb: tuple | None = None, records: list[dict] | None = None) -> dict | None:
+    """Expected LoD2 elements {buildings, elements, roofs, morphs, mode, basis, region} or None (LoD2 off / nothing
+    expected). `records` = parsed lod2.json buildings (exact: build_plan.lod2_counts = Slab blocks + Roof + Morph after
+    the lod2_max_roofs cap, blocks only in mode "blocks" = include.lod2_roofs False, e.g. super-light); else a per-region
+    density prior from lod2.estimate for bb = (s, w, n, e) (no network: the region is judged by its bounding box)."""
+    s = settings or {}
+    inc = s.get("include") or {}
+    if not inc.get("buildings", True) or not inc.get("lod2", True):
+        return None
+    cap = s.get("lod2_max_roofs")
+    cap = LOD2_DEFAULT_MAX_ROOFS if cap is None else int(cap)
+    mode = "blocks" if inc.get("lod2_roofs") is False else "roofs"
+    from . import lod2 as L2
+    if records is not None:
+        if not records:
+            return None
+        from . import build_plan as bp
+        site = {"buildings": [{"osm_id": f"lod2/{r['id']}", "source": r.get("source") or "lod2:", "footprint": r["footprint"],
+                               "holes": r.get("holes") or [], "base_z": 0.0, "height": r.get("height") or 0.0,
+                               "tags": {}, "lod2": r} for r in records]}
+        c = bp.lod2_counts(site, max_roofs=cap, mode=mode)
+        return {"basis": "records", "region": None, "buildings": c["buildings"], "elements": c["elements"],
+                "roofs": c["roofs"], "morphs": c["morphs"], "mode": c["mode"], "over_cap": c["over_cap"]}
+    if bb is None:
+        return None
+    region = L2.detect_region(bb, head=lambda u: 200)   # judged by the coarse boxes, no HEAD request
+    e = L2.estimate(bb, region)
+    if not e["buildings"]:
+        return None
+    roofs = 0 if mode == "blocks" else min(e["roof_planes"], cap if cap >= 0 else e["roof_planes"])
+    return {"basis": "prior", "region": region, "buildings": e["buildings"], "elements": e["buildings"] + roofs,
+            "roofs": roofs, "morphs": 0, "mode": mode, "over_cap": False}
+
+
 def estimate(area_km2: float, counts: dict | None, counts_source: str, tiles: dict, preset: bool = False,
-             settings: dict | None = None) -> dict:
+             settings: dict | None = None, lod2: dict | None = None) -> dict:
     """Time range + expected element count. counts: {buildings, roads, trees, water} or None (area-only guess).
-    settings (effective UI settings) switches on the shrub/hedge/forest-scatter objects (see vegetation_counts)."""
+    settings (effective UI settings) switches on the shrub/hedge/forest-scatter objects (see vegetation_counts).
+    lod2 = lod2_estimate(...): LoD2 buildings count as their real elements (Slab blocks + Roofs + Morphs) instead of 1
+    each; each is assumed to replace one OSM / Overture building (conflation), which is taken off the building count."""
     guessed = counts is None
     c = dict(counts) if counts else {k: int(round(v * area_km2)) for k, v in AREA_DENSITY.items()}
     roads = c.get("roads", 0) * (SUPER_LIGHT_ROAD_FACTOR if preset else 1.0)
@@ -198,10 +238,15 @@ def estimate(area_km2: float, counts: dict | None, counts_source: str, tiles: di
                 "roads_ways": int(round(roads)),
                 "road_beams": int(round(roads * ROAD_BEAMS_PER_WAY)), "trees": c.get("trees", 0),
                 "water": c.get("water", 0), "terrain": 1}
+    l2n = int(lod2["elements"]) if lod2 else 0
+    if lod2:
+        elements["buildings"] = max(elements["buildings"] - int(lod2["buildings"]), 0)
+    elements["lod2_buildings"] = int(lod2["buildings"]) if lod2 else 0
+    elements["lod2"] = l2n
     elements.update(vegetation_counts(None if guessed else c, settings, preset))
     elements.update(feature_counts(None if guessed else c, settings, preset))
     elements["trees"] += elements["scatter_trees"]
-    total = (elements["buildings"] + elements["road_beams"] + elements["trees"] + elements["water"] + 1 +
+    total = (elements["buildings"] + l2n + elements["road_beams"] + elements["trees"] + elements["water"] + 1 +
              elements["shrubs"] + elements["hedge_segments"] + sum(
                  elements[k] for k in ("railway_beams", "platforms", "barrier_elements", "building_parts", "ground",
                                        "piers", "power_towers")))
@@ -218,6 +263,11 @@ def estimate(area_km2: float, counts: dict | None, counts_source: str, tiles: di
     if ov_on and not guessed and "overture_buildings" not in c:
         notes.append("Overture Maps buildings (gap fill) are only counted after the first fetch (rough: not conflated "
                      "against OSM); they add to the building count")
+    if lod2:
+        notes.append(f"LoD2 3D buildings ({lod2['basis']}{', ' + lod2['region'] if lod2.get('region') else ''}): "
+                     f"{lod2['buildings']} buildings = {lod2['elements']} elements (Slab blocks"
+                     + ("" if lod2["mode"] == "blocks" else f" + {lod2['roofs']} Roofs + {lod2['morphs']} Morphs") +
+                     f"; mode {lod2['mode']}); each replaces one OSM / Overture building")
     if tiles["dgm1_missing"] or tiles["ndom_missing"]:
         notes.append(f"{tiles['dgm1_missing']} DGM1 + {tiles['ndom_missing']} nDOM 1 km tiles to download "
                      f"(~{int(DGM1_TILE_S)} s each, cached afterwards)")

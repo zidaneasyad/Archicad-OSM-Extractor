@@ -1,0 +1,574 @@
+{
+ "_comment": "M10 step 7 consumer fixture (build_plan.lod2_expand). site.json `buildings` records with LoD2 data; contract in osmctx/features.py module doc. Plane z = m above the building's LoD2 ground. DEBW_GABLE: gable 6/9 m (2 Roofs). way/4242: hip 5/8 m conflated with OSM (4 Roofs). DEBW_MIXED: 2 BuildingParts, gable 7/10 m + flat dormer 9 m (3 blocks) and a flat 3.5 m annex. DEBW_ODD: skillion 4/6 m (1 Roof) + non-planar + 80-degree surface (2 Morphs) + a tiny surface (skipped); mixed eave without parts (2 blocks).",
+ "buildings": [
+  {
+   "osm_id": "lod2/DEBW_GABLE",
+   "source": "lod2:lgl-bw",
+   "footprint": [
+    [
+     -40,
+     10
+    ],
+    [
+     -28,
+     10
+    ],
+    [
+     -28,
+     18
+    ],
+    [
+     -40,
+     18
+    ]
+   ],
+   "holes": [],
+   "base_z": 1.0,
+   "height": 9.0,
+   "height_source": "lod2_measured",
+   "tags": {
+    "building": "house"
+   },
+   "lod2": {
+    "region": "de-bw",
+    "dataset": "LGL Baden-Wuerttemberg",
+    "lod": "2",
+    "id": "DEBW_GABLE",
+    "ground_z_src": 320.0,
+    "eave_h": 6.0,
+    "ridge_h": 9.0
+   },
+   "roof": {
+    "shape": "lod2",
+    "height": 3.0,
+    "planes": [
+     {
+      "id": "s",
+      "polygon": [
+       [
+        -40,
+        10,
+        6
+       ],
+       [
+        -28,
+        10,
+        6
+       ],
+       [
+        -28,
+        14,
+        9
+       ],
+       [
+        -40,
+        14,
+        9
+       ]
+      ]
+     },
+     {
+      "id": "n",
+      "polygon": [
+       [
+        -28,
+        18,
+        6
+       ],
+       [
+        -40,
+        18,
+        6
+       ],
+       [
+        -40,
+        14,
+        9
+       ],
+       [
+        -28,
+        14,
+        9
+       ],
+       [
+        -28,
+        18,
+        6
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "osm_id": "way/4242",
+   "source": "lod2:lgl-bw",
+   "footprint": [
+    [
+     -20,
+     10
+    ],
+    [
+     -6,
+     10
+    ],
+    [
+     -6,
+     20
+    ],
+    [
+     -20,
+     20
+    ]
+   ],
+   "holes": [],
+   "base_z": 0.5,
+   "height": 8.0,
+   "height_source": "lod2_measured",
+   "tags": {
+    "building": "yes",
+    "name": "conflated with OSM way/4242"
+   },
+   "lod2": {
+    "region": "de-bw",
+    "dataset": "LGL Baden-Wuerttemberg",
+    "lod": "2",
+    "id": "DEBW_HIP",
+    "ground_z_src": 320.0,
+    "eave_h": 5.0,
+    "ridge_h": 8.0
+   },
+   "roof": {
+    "shape": "lod2",
+    "height": 3.0,
+    "planes": [
+     {
+      "polygon": [
+       [
+        -20,
+        10,
+        5
+       ],
+       [
+        -6,
+        10,
+        5
+       ],
+       [
+        -11,
+        15,
+        8
+       ],
+       [
+        -15,
+        15,
+        8
+       ]
+      ]
+     },
+     {
+      "polygon": [
+       [
+        -6,
+        20,
+        5
+       ],
+       [
+        -20,
+        20,
+        5
+       ],
+       [
+        -15,
+        15,
+        8
+       ],
+       [
+        -11,
+        15,
+        8
+       ]
+      ]
+     },
+     {
+      "polygon": [
+       [
+        -20,
+        20,
+        5
+       ],
+       [
+        -20,
+        10,
+        5
+       ],
+       [
+        -15,
+        15,
+        8
+       ]
+      ]
+     },
+     {
+      "polygon": [
+       [
+        -6,
+        10,
+        5
+       ],
+       [
+        -6,
+        20,
+        5
+       ],
+       [
+        -11,
+        15,
+        8
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "osm_id": "lod2/DEBW_MIXED",
+   "source": "lod2:lgl-bw",
+   "footprint": [
+    [
+     -40,
+     -20
+    ],
+    [
+     -24,
+     -20
+    ],
+    [
+     -24,
+     -14
+    ],
+    [
+     -30,
+     -14
+    ],
+    [
+     -30,
+     -10
+    ],
+    [
+     -40,
+     -10
+    ]
+   ],
+   "holes": [],
+   "base_z": 2.0,
+   "height": 10.0,
+   "height_source": "lod2_measured",
+   "tags": {
+    "building": "residential"
+   },
+   "lod2": {
+    "region": "de-bw",
+    "dataset": "LGL Baden-Wuerttemberg",
+    "lod": "2",
+    "id": "DEBW_MIXED",
+    "ground_z_src": 320.0,
+    "eave_h": 3.5,
+    "ridge_h": 10.0,
+    "parts": [
+     {
+      "id": "DEBW_MIXED_1",
+      "footprint": [
+       [
+        -40,
+        -20
+       ],
+       [
+        -30,
+        -20
+       ],
+       [
+        -30,
+        -10
+       ],
+       [
+        -40,
+        -10
+       ]
+      ],
+      "holes": [],
+      "min_h": 0.0,
+      "eave_h": 7.0,
+      "top_h": 10.0,
+      "roof_planes": [
+       {
+        "polygon": [
+         [
+          -40,
+          -20,
+          7
+         ],
+         [
+          -30,
+          -20,
+          7
+         ],
+         [
+          -30,
+          -15,
+          10
+         ],
+         [
+          -40,
+          -15,
+          10
+         ]
+        ]
+       },
+       {
+        "polygon": [
+         [
+          -30,
+          -10,
+          7
+         ],
+         [
+          -40,
+          -10,
+          7
+         ],
+         [
+          -40,
+          -15,
+          10
+         ],
+         [
+          -30,
+          -15,
+          10
+         ]
+        ]
+       },
+       {
+        "polygon": [
+         [
+          -37,
+          -19,
+          9
+         ],
+         [
+          -34,
+          -19,
+          9
+         ],
+         [
+          -34,
+          -17,
+          9
+         ],
+         [
+          -37,
+          -17,
+          9
+         ]
+        ],
+        "id": "dormer-flat"
+       }
+      ]
+     },
+     {
+      "id": "DEBW_MIXED_2",
+      "footprint": [
+       [
+        -30,
+        -20
+       ],
+       [
+        -24,
+        -20
+       ],
+       [
+        -24,
+        -14
+       ],
+       [
+        -30,
+        -14
+       ]
+      ],
+      "holes": [],
+      "min_h": 0.0,
+      "eave_h": 3.5,
+      "top_h": 3.5,
+      "roof_planes": [
+       {
+        "polygon": [
+         [
+          -30,
+          -20,
+          3.5
+         ],
+         [
+          -24,
+          -20,
+          3.5
+         ],
+         [
+          -24,
+          -14,
+          3.5
+         ],
+         [
+          -30,
+          -14,
+          3.5
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "roof": {
+    "shape": "lod2",
+    "height": 6.5,
+    "planes": []
+   }
+  },
+  {
+   "osm_id": "lod2/DEBW_ODD",
+   "source": "lod2:lgl-bw",
+   "footprint": [
+    [
+     0,
+     -20
+    ],
+    [
+     8,
+     -20
+    ],
+    [
+     8,
+     -10
+    ],
+    [
+     0,
+     -10
+    ]
+   ],
+   "holes": [],
+   "base_z": 0.0,
+   "height": 7.2,
+   "height_source": "lod2_measured",
+   "tags": {},
+   "lod2": {
+    "region": "de-bw",
+    "dataset": "LGL Baden-Wuerttemberg",
+    "lod": "2",
+    "id": "DEBW_ODD",
+    "ground_z_src": 320.0
+   },
+   "roof": {
+    "shape": "lod2",
+    "height": 3.2,
+    "planes": [
+     {
+      "polygon": [
+       [
+        0,
+        -20,
+        4
+       ],
+       [
+        8,
+        -20,
+        4
+       ],
+       [
+        8,
+        -14,
+        6
+       ],
+       [
+        0,
+        -14,
+        6
+       ]
+      ],
+      "id": "skillion"
+     },
+     {
+      "polygon": [
+       [
+        0,
+        -14,
+        6
+       ],
+       [
+        8,
+        -14,
+        6
+       ],
+       [
+        8,
+        -10,
+        7.2
+       ],
+       [
+        0,
+        -10,
+        6.6
+       ]
+      ],
+      "id": "twisted (non-planar)"
+     },
+     {
+      "polygon": [
+       [
+        8,
+        -20,
+        4
+       ],
+       [
+        8,
+        -14,
+        4
+       ],
+       [
+        8.4,
+        -14,
+        6.4
+       ],
+       [
+        8.4,
+        -20,
+        6.4
+       ]
+      ],
+      "id": "steep (80 deg)"
+     },
+     {
+      "polygon": [
+       [
+        0,
+        -20,
+        4
+       ],
+       [
+        0.3,
+        -20,
+        4
+       ],
+       [
+        0.3,
+        -19.7,
+        4.1
+       ]
+      ],
+      "id": "tiny"
+     }
+    ]
+   }
+  }
+ ]
+}

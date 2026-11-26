@@ -26,6 +26,7 @@ from shapely.ops import linemerge, polygonize, unary_union
 from shapely.validation import make_valid
 
 from . import features
+from . import lod2 as l2m
 from . import overture as ovt
 from . import trees as treelib
 from . import vegetation as veg
@@ -52,10 +53,18 @@ DEFAULT_SETTINGS = {
         "default": 4,
     },
     "include": {"terrain": True, "buildings": True, "roads": True, "trees": True, "water": True, "shrubs": True,
-                "land_cover": True, "overture_buildings": True, **features.INCLUDE_DEFAULTS},
+                "land_cover": True, "overture_buildings": True, "lod2": True, "lod2_roofs": True,
+                **features.INCLUDE_DEFAULTS},
     # Overture Maps buildings fill gaps in OSM: kept only if < this share of their own area is covered by OSM
     # buildings (osmctx/overture.py conflate); heights Overture height -> num_floors x floor_height -> default
     "overture_overlap_max": ovt.OVERLAP_MAX,
+    # LoD2 3D buildings (osmctx/lod2.py; include.lod2, include.lod2_roofs False = flat blocks only, builder side):
+    # an LoD2 building replaces every OSM / Overture building whose footprint overlaps it by >= lod2_overlap_min of the
+    # SMALLER area; lod2_max_roofs caps Roof+Morph elements (builder, build_plan.lod2_expand); lod2_allow_large lets the
+    # fetch download the big regions (Japan, Switzerland ~100-170 MB; fetch-only)
+    "lod2_overlap_min": 0.5,
+    "lod2_max_roofs": 400,
+    "lod2_allow_large": False,
     "crown_neighbour_cap": True,  # ratio-derived crowns may not exceed 1.15 x nearest-neighbour spacing
     # "dsm" = use the DEM as fetched; "bare_earth_approx" = mask DEM cells under buildings/wood/trees and
     # rebuild them from the remaining cells. None = auto: bare_earth_approx for surface models (DSM).
@@ -596,6 +605,9 @@ def _merge_settings(settings: dict | None) -> dict:
     for k in ("tree_height", "broadleaf_height", "conifer_height", "broadleaf_crown_ratio", "conifer_crown_ratio"):
         s[k] = float(s[k])
     s["use_genus_table"] = bool(s["use_genus_table"])
+    s["lod2_overlap_min"] = min(max(float(s["lod2_overlap_min"]), 0.0), 1.0)
+    s["lod2_max_roofs"] = int(s["lod2_max_roofs"])
+    s["lod2_allow_large"] = bool(s["lod2_allow_large"])
     s["road_classes_exclude"] = sorted({str(c).strip().lower() for c in (s.get("road_classes_exclude") or []) if str(c).strip()})
     if s.get("terrain_min_spacing"):
         s["terrain_min_spacing"] = float(s["terrain_min_spacing"])
@@ -656,6 +668,82 @@ class _Crossings:
         return res
 
 
+# OSM tags copied onto the LoD2 record that replaces an OSM building (roof:* / height tags are NOT: the measured
+# geometry wins; the builder ignores them for LoD2 records anyway)
+LOD2_CARRY_TAGS = frozenset((
+    "building", "name", "alt_name", "old_name", "official_name", "operator", "brand", "amenity", "shop", "tourism",
+    "historic", "office", "leisure", "building:levels", "building:material", "building:colour", "start_date",
+    "heritage", "wikidata", "wikipedia", "website", "ref:bag", "ref:MLIT_PLATEAU"))
+
+
+def lod2_carry_tags(t: dict) -> dict:
+    return {k: v for k, v in t.items() if k in LOD2_CARRY_TAGS or k.startswith(("addr:", "name:"))}
+
+
+class _L2Reframe:
+    """LoD2 record (lod2.json frame = EPSG `crs`, UTM minus `origin`) -> the convert Frame (UTM minus (E0, N0)).
+    Same CRS: a pure shift. Other CRS (bbox centre fell in another UTM zone): each record is mapped rigidly at its
+    own centre (translation + the rotation between the two grids), plane normals / azimuths rotated with it."""
+
+    def __init__(self, crs: int, origin, frame: "Frame"):
+        self.o = (float(origin[0]), float(origin[1]))
+        self.f0 = (float(frame.E0), float(frame.N0))
+        self.same = int(crs) == int(frame.epsg)
+        self.tf = None if self.same else Transformer.from_crs(f"EPSG:{int(crs)}", f"EPSG:{int(frame.epsg)}", always_xy=True)
+
+    def _mapper(self, rec: dict):
+        ox, oy = self.o
+        E0, N0 = self.f0
+        if self.same:
+            dx, dy = ox - E0, oy - N0
+            return (lambda p: [round(float(p[0]) + dx, 3), round(float(p[1]) + dy, 3)]), 0.0
+        bb = rec["bbox"]
+        cx, cy = (bb[0] + bb[2]) / 2 + ox, (bb[1] + bb[3]) / 2 + oy
+        c2x, c2y = self.tf.transform(cx, cy)
+        ex, ey = self.tf.transform(cx + 10.0, cy)
+        th = math.atan2(ey - c2y, ex - c2x)
+        ct, st = math.cos(th), math.sin(th)
+
+        def pt(p):
+            ax, ay = float(p[0]) + ox - cx, float(p[1]) + oy - cy
+            return [round(ct * ax - st * ay + c2x - E0, 3), round(st * ax + ct * ay + c2y - N0, 3)]
+        return pt, th
+
+    def __call__(self, rec: dict) -> dict:
+        pt, th = self._mapper(rec)
+
+        def ring(r):
+            return [pt(p) for p in r]
+
+        def rings(rs):
+            return [ring(r) for r in rs or []]
+
+        def plane(pl):
+            q = dict(pl, polygon=ring(pl["polygon"]), holes=rings(pl.get("holes")))
+            if pl.get("p0") is not None:
+                q["p0"] = pt(pl["p0"])
+            if pl.get("pivot"):
+                q["pivot"] = [pt(a) for a in pl["pivot"]]
+            if th:
+                nx, ny, nz = pl["normal"]
+                c, s = math.cos(th), math.sin(th)
+                q["normal"] = [round(c * nx - s * ny, 6), round(s * nx + c * ny, 6), nz]
+                if "azimuth" in pl:
+                    q["azimuth"] = round((pl["azimuth"] - th) % (2 * math.pi), 5)
+            return q
+
+        out = dict(rec)
+        out["footprint"] = ring(rec["footprint"])
+        out["holes"] = rings(rec.get("holes"))
+        xs = [p[0] for p in out["footprint"]]
+        ys = [p[1] for p in out["footprint"]]
+        out["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
+        out["parts"] = [dict(p, footprint=ring(p["footprint"]), holes=rings(p.get("holes")),
+                             roof_planes=[plane(x) for x in p.get("roof_planes") or []],
+                             flat_roofs=[plane(x) for x in p.get("flat_roofs") or []]) for p in rec.get("parts") or []]
+        return out
+
+
 class Converter:
     def __init__(self, cache_dir, settings: dict | None):
         self.cache = Path(cache_dir)
@@ -694,6 +782,7 @@ class Converter:
         self._cell_in_b = None
         self._wg = None                   # _water_geoms result
         self._ov = None                   # _overture result
+        self._l2 = None                   # _lod2 result
         self._area_memo: dict = {}        # id(osm element) -> _area_local result
         self._water_polys: list[dict] = []
         self._water_union_b = None
@@ -782,6 +871,9 @@ class Converter:
             nx, ny = self.f.to_local([a for a, _ in node_ll], [b for _, b in node_ll])
             for slot, c in zip(node_slots, shapely.buffer(shapely.points(nx, ny), GROUND_TREE_RADIUS, quad_segs=16)):
                 trees[slot] = c
+        for it in self._lod2()["items"]:   # LoD2 buildings raise the DSM too
+            bld.append(it["poly"].buffer(GROUND_BUILDING_BUFFER))
+            bld_heights.append(it["height"])
         for q, props in self._overture()["kept"]:   # Overture buildings raise the DSM too
             bld.append(q.buffer(GROUND_BUILDING_BUFFER))
             bld_heights.append(ovt.height_for(props, self.s["floor_height"], self.s["default_levels"])[0])
@@ -801,6 +893,103 @@ class Converter:
             if why is None:
                 out.extend(polygons_of(make_valid(g)))
         return out
+
+    def _osm_building_items(self) -> list[tuple[dict, object]]:
+        """[(element, local geometry)] of every OSM building (not building:part, not building=no) in the fetch area."""
+        out = []
+        for el in self.els:
+            t = el.get("tags", {})
+            if "building" not in t or "building:part" in t or t.get("building") == "no":
+                continue
+            g, _, why = self._area_local(el, t)
+            if why is None:
+                out.append((el, make_valid(g)))
+        return out
+
+    # ---- LoD2 3D buildings (first source: measured geometry, conflated against OSM) -----------
+    def _lod2(self) -> dict:
+        """{on, reason, region, items: [{poly, rec, el, osm_id, height}], replaced: {id(osm element)}, stats, polys}:
+        the LoD2 buildings inside the boundary, re-framed to this converter's Frame, and the OSM buildings they replace
+        (cached; the Overture conflation and the ground mask read it)."""
+        if self._l2 is None:
+            self._l2 = self._conflate_lod2()
+        return self._l2
+
+    def _conflate_lod2(self) -> dict:
+        l2 = {"on": False, "reason": None, "region": None, "dataset": None, "items": [], "replaced": set(),
+              "stats": {}, "polys": []}
+        inc = self.s["include"]
+        if not inc.get("buildings", True) or not inc.get("lod2", True):
+            l2["reason"] = "off"
+            return l2
+        path = self.cache / l2m.FILE
+        m = self.meta.get("lod2") or {}
+        if not path.exists():
+            l2["reason"] = (f"no {l2m.FILE} in cache ({m['error']})" if m.get("error") else
+                            f"no {l2m.FILE} in cache (no LoD2 source for this location, or not fetched)")
+            return l2
+        try:
+            data = l2m.load(path)
+            region = data["region"]
+            crs = int(str(data["crs"]).split(":")[-1])
+            reframe = _L2Reframe(crs, data.get("origin") or (0.0, 0.0), self.f)
+            dataset = l2m.REGIONS[region]["dataset"]
+        except Exception as ex:  # noqa: BLE001
+            l2["reason"] = f"{l2m.FILE} unreadable ({type(ex).__name__}: {ex})"
+            return l2
+        st = Counter()
+        cands = []   # (local polygon, re-framed record)
+        for r in data.get("buildings") or []:
+            st["candidates"] += 1
+            try:
+                rr = reframe(r)
+                p = Polygon(rr["footprint"], [h for h in rr["holes"] if len(h) >= 3])
+                polys, dropped = clean_polygons(p)
+            except Exception:  # noqa: BLE001
+                st["skipped_bad_geometry"] += 1
+                continue
+            if not polys:
+                st["skipped_degenerate"] += 1
+                continue
+            p = max(polys, key=lambda q: q.area)
+            if not self.bpoly.covers(p.centroid):
+                st["outside"] += 1
+                continue
+            cands.append((p, rr))
+        osm = self._osm_building_items()
+        thr = float(self.s["lod2_overlap_min"])
+        pairs = []
+        if osm and cands:
+            tree = shapely.STRtree([g for _, g in osm])
+            for li, (p, _rr) in enumerate(cands):
+                for j in tree.query(p):
+                    g = osm[int(j)][1]
+                    inter = p.intersection(g).area
+                    small = min(p.area, g.area)
+                    if inter > 0 and small > 0 and inter / small >= thr:
+                        pairs.append((inter, li, int(j)))
+        pairs.sort(key=lambda t: -t[0])
+        carry: dict[int, int] = {}
+        used: set[int] = set()
+        replaced: set[int] = set()
+        for _inter, li, j in pairs:      # every qualifying OSM building is replaced; the largest overlap lends its id/tags
+            replaced.add(id(osm[j][0]))
+            if li not in carry and j not in used:
+                carry[li] = j
+                used.add(j)
+        items = []
+        for li, (p, rr) in enumerate(cands):
+            el = osm[carry[li]][0] if li in carry else None
+            h = float(rr.get("height") or rr.get("ridge_h") or 0.0)
+            if h <= 0.0:
+                h = float(self.s["default_levels"]) * float(self.s["floor_height"])
+            items.append({"poly": p, "rec": rr, "el": el, "height": h,
+                          "osm_id": osm_id(el) if el is not None else f"lod2/{rr['id']}"})
+        st["matched"] = len(carry)
+        st["osm_replaced"] = len(replaced)
+        l2.update(on=True, region=region, dataset=dataset, items=items, replaced=replaced, stats=dict(st),
+                  polys=[it["poly"] for it in items])
+        return l2
 
     def _overture(self) -> dict:
         """{kept: [(local polygon, props)], stats, on, reason}: Overture buildings that fill gaps in OSM (cached)."""
@@ -827,7 +1016,9 @@ class Converter:
                 continue
             props = ft.get("properties") or {}
             cands.extend((q, props) for q in polygons_of(make_valid(g)))
-        kept, stats = ovt.conflate(cands, self._osm_bld_polys(), float(self.s["overture_overlap_max"]))
+        # LoD2 footprints count as "existing buildings" too: Overture is only a gap fill (an LoD2 building wins)
+        kept, stats = ovt.conflate(cands, self._osm_bld_polys() + list(self._lod2()["polys"]),
+                                   float(self.s["overture_overlap_max"]))
         ov.update(on=True, kept=kept, stats=stats)
         return ov
 
@@ -1060,6 +1251,41 @@ class Converter:
             rec.update(extra)
         return rec
 
+    def _lod2_buildings(self, out: list[dict]) -> None:
+        """Append the LoD2 buildings (inside the boundary) to `out`, per the contract in the features.py module doc:
+        osm_id "way/N" when they replaced an OSM building (its name / building / addr tags are carried over), else
+        "lod2/<native id>"; source "lod2:<region>"; base_z = DEM ground under the footprint (like OSM buildings, heights
+        in the record are offsets above it, the LoD2 datum is never used); `lod2` = the lod2.py record (parts, roof
+        planes) with region + dataset labels."""
+        l2 = self._lod2()
+        if not l2["on"]:
+            return
+        n = n_conf = n_lod1 = 0
+        for it in l2["items"]:
+            rr, p = it["rec"], it["poly"]
+            tags = {"building": "yes", "osmctx:source": rr["source"]}
+            if rr.get("storeys"):
+                tags["building:levels"] = str(rr["storeys"])
+            if rr.get("year"):
+                tags["start_date"] = str(rr["year"])
+            if rr.get("function"):
+                tags["osmctx:lod2_function"] = str(rr["function"])
+            if it["el"] is not None:
+                tags.update(lod2_carry_tags(it["el"].get("tags", {})))
+                tags["osmctx:conflated"] = "yes"
+                n_conf += 1
+            block = {k: v for k, v in rr.items() if k not in ("footprint", "holes", "bbox")}
+            block.update(region=l2["region"], dataset=l2["dataset"], lod=str(rr.get("lod", 2)))
+            self.heights["lod2"] += 1
+            out.append(self._building_record(p, it["osm_id"], tags, it["height"], "lod2",
+                                             {"source": rr["source"], "lod2": block}))
+            n += 1
+            n_lod1 += int(rr.get("lod") == 1)
+        self.counts["buildings_lod2"] = n
+        self.counts["buildings_lod2_conflated"] = n_conf
+        if n_lod1:
+            self.counts["buildings_lod2_lod1_only"] = n_lod1
+
     def _overture_buildings(self, out: list[dict]) -> None:
         """Append the conflated Overture buildings (inside the boundary) to `out`. Records carry
         source "overture:<dataset>", estimated (ML-derived footprint) and height_source overture_height |
@@ -1091,6 +1317,7 @@ class Converter:
     # ---- buildings -----------------------------------------------------------------
     def buildings(self) -> list[dict]:
         out = []
+        replaced = self._lod2()["replaced"]
         for el in self.els:
             t = el.get("tags", {})
             if "building" not in t and "building:part" not in t:
@@ -1103,6 +1330,11 @@ class Converter:
                 continue
             if el["type"] == "node":
                 self.counts["building_nodes_skipped"] += 1
+                continue
+            if id(el) in replaced:        # an LoD2 building covers it (conflation, see _conflate_lod2)
+                g, _, why = self._area_local(el, t)
+                if why is None and self.bpoly.covers(g.centroid):
+                    self.counts["buildings_osm_replaced_by_lod2"] += 1
                 continue
             g, bad, why = self._area_local(el, t)
             if bad:
@@ -1120,6 +1352,7 @@ class Converter:
                 self.heights[src] += 1
                 out.append(self._building_record(p, osm_id(el), t, h, src))
         self.counts["buildings_osm"] = len(out)
+        self._lod2_buildings(out)
         self._overture_buildings(out)
         self.counts["buildings"] = len(out)
         if self.counts["buildings_steep_footprint"]:
@@ -1974,6 +2207,27 @@ class Converter:
                         source_credits=[ovt.credit_for(k) for k in used])
         return info
 
+    def lod2_info(self) -> dict:
+        """report.info.lod2: what the LoD2 source did (counts, conflation, region, credits, why not). `summary` is the
+        building-source line "N OSM + M Overture + K LoD2 (R replaced)"."""
+        l2 = self._lod2()
+        m = self.meta.get("lod2") or {}
+        inc = self.s["include"]
+        info = {"enabled": bool(inc.get("buildings", True) and inc.get("lod2", True)),
+                "roofs": inc.get("lod2_roofs", True) is not False, "applied": bool(l2["on"]), "reason": l2["reason"],
+                "region": l2.get("region") or m.get("region"), "dataset": l2.get("dataset") or m.get("dataset"),
+                "overlap_min": float(self.s["lod2_overlap_min"]), "allow_large": bool(self.s["lod2_allow_large"]),
+                "fetched": m.get("count"), "fetch_status": m.get("status")}
+        if l2["on"]:
+            c = self.counts
+            info.update(stats=l2["stats"], added=c.get("buildings_lod2", 0), conflated=c.get("buildings_lod2_conflated", 0),
+                        replaced=c.get("buildings_osm_replaced_by_lod2", 0), osm_buildings=c.get("buildings_osm", 0),
+                        overture_buildings=c.get("buildings_overture", 0), lod1_only=c.get("buildings_lod2_lod1_only", 0),
+                        roof_planes=m.get("roof_planes"), **l2m.attribution_block(l2["region"]))
+            info["summary"] = (f"{info['osm_buildings']} OSM + {info['overture_buildings']} Overture + {info['added']} "
+                               f"LoD2 ({info['replaced']} replaced)")
+        return info
+
     def report(self, site) -> dict:
         lat = self.f.lat0
         cw, ch = self.dem.cell_size_m(lat)
@@ -2022,6 +2276,12 @@ class Converter:
                      "Overture height/floors or the default). " + ovi["attribution"])
         elif ovi.get("enabled") and not ovi.get("applied") and ovi.get("reason"):
             w.append(f"Overture buildings not used: {ovi['reason']}")
+        l2i = self.lod2_info()
+        if l2i.get("applied") and l2i.get("added"):
+            w.append(f"Buildings: {l2i['summary']}. {l2i['added']} building(s) from LoD2 ({l2i['dataset']}, region "
+                     f"{l2i['region']}): measured walls and roof planes, heights relative to the DEM ground under each "
+                     f"footprint (the LoD2 height datum is not used); {l2i['conflated']} replaced OSM buildings "
+                     f"(id and name/address tags kept). " + l2i["attribution"])
         w.extend(f"fetch: {m}" for m in self.meta.get("warnings", []))
         skipped = {k: v for k, v in self.counts.items() if "skipped" in k or "outside" in k or "not_" in k}
         if skipped:
@@ -2080,6 +2340,7 @@ class Converter:
                                  "z_abs": SEA_LEVEL, "vertical_datum": di.get("dem_vertical_datum"),
                                  "coastline_ways": int(self._water_geoms()["has_coast"])},
                          "overture": ovi,
+                         "lod2": l2i,
                          "osm": {"overpass_url": self.meta.get("overpass_url"), "osm_base": self.meta.get("osm_base"),
                                  "osm_age_days": self.meta.get("osm_age_days"),
                                  "bridge_chains": self.meta.get("bridge_chains"),
@@ -2249,6 +2510,7 @@ def format_report(site: dict) -> str:
     lines = [f"origin: lat {og['lat']} lon {og['lon']} EPSG:{og['epsg']} E {og['easting']} N {og['northing']} "
              f"elevation {og['elevation']} m",
              "counts: " + ", ".join(f"{k}={v}" for k, v in r["counts"].items()),
+             *(["buildings: " + r["info"]["lod2"]["summary"]] if (r["info"].get("lod2") or {}).get("applied") else []),
              "heights: " + json.dumps(r["defaults_used"]["heights"]),
              "widths: " + json.dumps(r["defaults_used"]["widths"]),
              "tree heights: " + json.dumps(r["defaults_used"]["tree_heights"]),

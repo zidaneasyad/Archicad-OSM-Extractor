@@ -27,6 +27,7 @@ from test_convert import flat, node, run, way
 def _no_overture_network(monkeypatch):
     """Keep these tests offline: F.fetch would otherwise query the live Overture S3 bucket."""
     monkeypatch.setattr(F.OVT, "try_fetch", lambda *a, **k: {"status": "failed", "error": "offline test stub"})
+    monkeypatch.setattr(F.L2, "detect_region", lambda *a, **k: None)   # no LoD2 job (it would query the live LGL server)
 
 
 # ------------------------------------------------------------------ scatter (pure)

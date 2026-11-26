@@ -66,7 +66,7 @@
           <select id="s_dem">
             <option value="auto">Auto (BW DGM1 / Copernicus)</option>
             <option value="layered">Layered stack (Tier 1 Regional -&gt; Mapterhorn -&gt; GLO-30)</option>
-            <option value="id_demnas">Indonesia BIG DEMNAS (~8 m)</option>
+            <option value="id_demnas" disabled>Indonesia BIG DEMNAS (~8 m, needs token: unavailable)</option>
             <option value="mapterhorn">Mapterhorn Global (0.5-30 m)</option>
             <option value="bw_dgm1">Baden-Württemberg DGM1 (1 m)</option>
             <option value="us_3dep">USA USGS 3DEP (1-10 m)</option>
@@ -74,10 +74,22 @@
             <option value="fr_ign">France IGN LiDAR HD (0.5 m)</option>
             <option value="uk_ea">UK EA LiDAR DTM (1 m)</option>
             <option value="no_kartverket">Norway Kartverket DTM (1 m)</option>
+            <option value="vt_vcgi">USA Vermont VCGI LiDAR (0.35 m)</option>
+            <option value="il_isgs">USA Illinois ISGS LiDAR (0.3 m)</option>
+            <option value="ky_kyfromabove">USA Kentucky KyFromAbove (0.6 m)</option>
+            <option value="cz_cuzk">Czechia CUZK DMR 5G (1 m)</option>
+            <option value="hk_cedd">Hong Kong CEDD LiDAR DTM (1 m)</option>
+            <option value="au_qld">Queensland QldDem (1 m)</option>
+            <option value="ee_maaamet">Estonia Maa-amet LiDAR (1 m)</option>
+            <option value="ht_cnigs">Haiti CNIGS LiDAR (1.5 m)</option>
+            <option value="jp_gsj">Japan GSJ seamless DEM (~10 m)</option>
+            <option value="mx_inegi">Mexico INEGI CEM 3.0 (15 m)</option>
+            <option value="nz_linz" disabled>New Zealand LINZ 1 m (needs API key: unavailable)</option>
+            <option value="tz_msimbazi" disabled>Dar es Salaam Msimbazi LiDAR (unavailable)</option>
             <option value="arcticdem">ArcticDEM (&gt;60°N, 2 m)</option>
             <option value="rema">Antarctica REMA (&lt;60°S, 2 m)</option>
             <option value="gedtm30">Global GEDTM30 Bare-Earth (30 m)</option>
-            <option value="fabdem">Global FABDEM Bare-Earth (30 m, NC)</option>
+            <option value="fabdem" disabled>Global FABDEM Bare-Earth (30 m, NC: unavailable)</option>
             <option value="copernicus">Copernicus GLO-30 (30 m DSM)</option>
             <option value="file">Local file path</option>
           </select></div>
@@ -88,7 +100,11 @@
         <div class="f"><label for="i_terrain">Include terrain</label><input type="checkbox" id="i_terrain"></div>
         <div class="f"><label for="s_hillshade">Hillshade relief overlay</label><input type="checkbox" id="s_hillshade"></div>
         <div class="f"><label for="s_ctype">Terrain model</label>
-          <select id="s_ctype"><option value="mesh">Real contour map (Mesh)</option><option value="stepped">Stepped contour model (Terrace Slabs)</option></select></div>
+          <select id="s_ctype"><option value="stepped">Slab - stepped contour model (terrace slabs)</option><option value="mesh">Mesh - real contour map</option><option value="morph">Morph / GDL - 3D contour lines (Morph)</option></select></div>
+        <div class="f" id="s_tsub_row"><label for="s_tsub">Morph / GDL as</label>
+          <select id="s_tsub"><option value="morph">Morph (terrain + contour wire Morphs; hides triangle lines on AC29+)</option><option value="gdl">GDL object (one generated library part, contours in 2D + 3D)</option></select></div>
+        <div class="f"><label for="s_pstyle">2D style</label>
+          <select id="s_pstyle"><option value="colour">Colour (plan colour fills)</option><option value="mono">Monochrome site plan</option><option value="none">None (keep project/favorite settings)</option></select></div>
         <div class="f"><label for="s_contours">Contour lines</label><input type="checkbox" id="s_contours"></div>
         <div class="f"><label for="s_cint">Interval</label>
           <select id="s_cint"><option value="">Auto</option><option value="0.25">0.25 m</option><option value="0.5">0.5 m</option><option value="1">1 m</option><option value="2">2 m</option><option value="5">5 m</option><option value="10">10 m</option></select></div>
@@ -106,6 +122,10 @@
         <div class="f"><label for="i_buildings">Include buildings</label><input type="checkbox" id="i_buildings"></div>
         <div class="f"><label for="i_overture_buildings">Fill missing buildings from Overture Maps</label><input type="checkbox" id="i_overture_buildings"></div>
         <p class="hint">Where OSM has few buildings (villages), Overture Maps footprints (Google Open Buildings, Microsoft ML, Esri) are added if they overlap no OSM building. Marked "estimated", height from Overture height / floors or the default; Source property names the dataset; group "Buildings (Overture)". Downloaded once per site (a few MB, ~10 s), never blocks the OSM fetch. Also on in the super-light preset.</p>
+        <div class="f"><label for="i_lod2">Use LoD2 3D buildings where available (BW, NL, CH, JP)</label><input type="checkbox" id="i_lod2"></div>
+        <div class="f"><label for="i_lod2_roofs">LoD2 roofs as Roof elements</label><input type="checkbox" id="i_lod2_roofs"></div>
+        <div class="f"><label for="s_lod2_large">Allow large LoD2 downloads (Japan, Switzerland ≈100–170 MB)</label><input type="checkbox" id="s_lod2_large"></div>
+        <p class="hint">Where a LoD2 dataset covers the site (Baden-Württemberg LGL, Netherlands 3DBAG, Japan PLATEAU, Switzerland swissBUILDINGS3D), measured buildings with real roof planes replace the OSM / Overture ones they overlap (by at least half of the smaller footprint; OSM id and name/address tags are kept, unmatched OSM buildings stay). Heights are relative to the terrain under each footprint. Roofs become Roof elements (off = flat blocks, as in the super-light preset); very large sites are capped at 400 Roof/Morph elements, the rest become blocks. Downloaded once per site, never blocks the OSM fetch; Japan and Switzerland only with the large-download option. Source property names the dataset; credit shown in the report.</p>
       </div>
     </details>
 
